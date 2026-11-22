@@ -1,0 +1,16 @@
+# Secrets and local auth config
+pypi-tok.txt
+GitHub CLI/
+.gitconfig
+.env
+.env.*
+!.env.example
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.part

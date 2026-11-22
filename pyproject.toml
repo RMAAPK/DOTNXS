@@ -1,0 +1,21 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "dotnxs"
+version = "0.1.0.dev0"
+description = "Single-file DOTNXS archive and model conversion tools"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.scripts]
+dotnxs = "dotnxs.cli:main"
+safetensors2nxs = "dotnxs.safetensors2nxs:main"
+
+[tool.scikit-build]
+wheel.packages = ["dotnxs"]
+cmake.build-type = "Release"
+sdist.include = ["CMakeLists.txt", "cpp/**", "dotnxs/**", "tests/**", "README.md", "FORMAT.md", "LICENSE"]
