@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and build tools
+        run: python -m pip install --upgrade pip build twine
+      - name: Install DOTNXS
+        run: python -m pip install .
+      - name: Confirm native C++ extension is installed
+        working-directory: ${{ runner.temp }}
+        run: python -c "import dotnxs._core; print('native core loaded')"
+      - name: Run tests against the installed wheel
+        working-directory: ${{ runner.temp }}
+        run: python -m unittest discover -s ${{ github.workspace }}/tests -v
+      - name: Check installed CLI
+        working-directory: ${{ runner.temp }}
+        run: dotnxs --help
+      - name: Build distributions
+        working-directory: ${{ github.workspace }}
+        run: python -m build
+      - name: Validate distributions
+        working-directory: ${{ github.workspace }}
+        run: python -m twine check dist/*

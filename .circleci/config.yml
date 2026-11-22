@@ -1,0 +1,42 @@
+version: 2.1
+
+functions:
+  setup-python: github.com/circleci-functions/setup-python@v0.5.0
+
+jobs:
+  test-and-build:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - setup-python:
+          with:
+            python-version: "3.12"
+      - run:
+          name: Install native build prerequisites
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y build-essential cmake ninja-build
+      - run:
+          name: Install package and build tools
+          command: |
+            python -m pip install --upgrade pip build twine
+            python -m pip install .
+      - run:
+          name: Run tests against the installed wheel
+          command: |
+            PROJECT_DIR="$PWD"
+            cd /tmp
+            python -c "import dotnxs._core; print('native core loaded')"
+            python -m unittest discover -s "$PROJECT_DIR/tests" -v
+            dotnxs --help
+      - run:
+          name: Build and validate distributions
+          command: |
+            python -m build
+            python -m twine check dist/*
+
+workflows:
+  verify:
+    jobs:
+      - test-and-build
