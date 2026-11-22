@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (leave false to build artifacts only)"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +29,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: >-
@@ -45,6 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: >-
@@ -62,6 +71,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.event_name == 'push' || inputs.publish == true
     name: Publish release to PyPI
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
