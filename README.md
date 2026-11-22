@@ -23,7 +23,22 @@ dotnxs inspect output.nxs
 dotnxs verify output.nxs
 ```
 
-The default internal chunk size is 4 MiB and can be changed with `--chunk-mib`. The converter does not quantize weights. It currently accepts one local `.safetensors` file; Transformers-directory, Hugging Face Hub, GGUF, and Parquet converters are planned follow-ups. Model inference is not implemented yet.
+The default internal chunk size is 4 MiB and can be changed with `--chunk-mib`. Conversion preserves source tensor bytes; it does not quantize weights.
+
+Convert a local Transformers directory (Safetensors weights plus config/tokenizer assets):
+
+```bash
+dotnxs convert transformers ./model-directory model.nxs
+```
+
+Convert a Hugging Face model repo (requires the optional Hub client):
+
+```bash
+python -m pip install 'dotnxs[hf]'
+dotnxs convert hf thinkingmachines/Inkling-2-Mini inkling.nxs
+```
+
+`hf2nxs` downloads the selected repository snapshot into the Hugging Face cache, then streams files from disk into one `.nxs` archive; it does not yet fetch individual tensor ranges directly from remote storage. GGUF and Parquet converters and model inference runtime remain future work.
 
 Run the converter tests with:
 

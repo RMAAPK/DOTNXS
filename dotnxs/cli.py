@@ -5,17 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from importlib.metadata import PackageNotFoundError, version
-
+from . import __version__
 from .archive import NxsArchive
+from .hf2nxs import convert_repo
 from .safetensors2nxs import convert_file
+from .transformers2nxs import convert_directory
 
 
 def _package_version() -> str:
-    try:
-        return version("dotnxs")
-    except PackageNotFoundError:
-        return "0.1.0.dev0"
+    return __version__
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -34,6 +32,22 @@ def _build_parser() -> argparse.ArgumentParser:
     safe_parser.add_argument("--chunk-mib", type=int, default=4)
     safe_parser.add_argument("--force", action="store_true")
 
+    transformers_parser = convert_subparsers.add_parser(
+        "transformers", help="convert a local Transformers model directory"
+    )
+    transformers_parser.add_argument("input", help="local model directory")
+    transformers_parser.add_argument("output", help="destination .nxs archive")
+    transformers_parser.add_argument("--chunk-mib", type=int, default=4)
+    transformers_parser.add_argument("--force", action="store_true")
+
+    hf_parser = convert_subparsers.add_parser("hf", help="download and convert a Hugging Face model repo")
+    hf_parser.add_argument("repo_id", help="Hugging Face repo in owner/name form")
+    hf_parser.add_argument("output", help="destination .nxs archive")
+    hf_parser.add_argument("--revision", help="branch, tag, or commit (default: main)")
+    hf_parser.add_argument("--cache-dir", help="Hugging Face Hub cache directory")
+    hf_parser.add_argument("--chunk-mib", type=int, default=4)
+    hf_parser.add_argument("--force", action="store_true")
+
     inspect_parser = subparsers.add_parser("inspect", help="show an NXS archive's manifest summary")
     inspect_parser.add_argument("archive", help="path to a .nxs archive")
 
@@ -48,18 +62,45 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "convert" and args.source_format == "safetensors":
+        if args.command == "convert" and args.source_format in {"safetensors", "transformers", "hf"}:
             if args.chunk_mib <= 0:
                 parser.error("--chunk-mib must be greater than zero")
-            result = convert_file(
-                args.input,
+            chunk_bytes = args.chunk_mib * 1024 * 1024
+            if args.source_format == "safetensors":
+                result = convert_file(
+                    args.input,
+                    args.output,
+                    chunk_bytes=chunk_bytes,
+                    overwrite=args.force,
+                )
+                print(
+                    f"Created {result['output']}: {result['tensor_count']} tensors, "
+                    f"{result['input_bytes']} input bytes"
+                )
+                return 0
+            if args.source_format == "transformers":
+                result = convert_directory(
+                    args.input,
+                    args.output,
+                    chunk_bytes=chunk_bytes,
+                    overwrite=args.force,
+                )
+                print(
+                    f"Created {result['output']}: {result['tensor_count']} tensors from "
+                    f"{result['weight_files']} weight files and {result['asset_files']} assets"
+                )
+                return 0
+            result = convert_repo(
+                args.repo_id,
                 args.output,
-                chunk_bytes=args.chunk_mib * 1024 * 1024,
+                revision=args.revision,
+                cache_dir=args.cache_dir,
+                chunk_bytes=chunk_bytes,
                 overwrite=args.force,
             )
             print(
-                f"Created {result['output']}: {result['tensor_count']} tensors, "
-                f"{result['input_bytes']} input bytes"
+                f"Created {result['output']} from {result['repo_id']}@{result['revision']}: "
+                f"{result['tensor_count']} tensors"
             )
             return 0
 
