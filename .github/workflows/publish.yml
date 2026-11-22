@@ -23,6 +23,7 @@ jobs:
       CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
       CIBW_ARCHS_WINDOWS: AMD64
       CIBW_ARCHS_MACOS: universal2
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
     strategy:
       fail-fast: false
       matrix:
