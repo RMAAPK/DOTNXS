@@ -8,6 +8,12 @@ The project is converter-first. The CLI wraps a C++17/pybind11 native archive wr
 - [Python package and CLI](pyproject.toml)
 - License: MIT (see [LICENSE](LICENSE))
 
+## Install
+
+```bash
+python -m pip install dotnxs
+```
+
 ## CLI
 
 ```bash
