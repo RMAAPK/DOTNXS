@@ -150,6 +150,36 @@ public:
         return entry;
     }
 
+    py::dict add_stream(const std::string& name,
+                       const py::object& source,
+                       std::uint64_t source_offset,
+                       std::uint64_t size,
+                       const std::string& kind,
+                       const std::string& dtype,
+                       const std::vector<std::int64_t>& shape,
+                       const py::dict& metadata) {
+        if (finished_) {
+            throw std::runtime_error("NXS writer is already finalized");
+        }
+        validate_name(name);
+        if (kind.empty()) {
+            throw std::invalid_argument("entry kind must be non-empty");
+        }
+        if (names_.count(name)) {
+            throw std::invalid_argument("duplicate NXS entry name: " + name);
+        }
+        for (auto dimension : shape) {
+            if (dimension < 0) {
+                throw std::invalid_argument("tensor shape dimensions must be non-negative");
+            }
+        }
+        source.attr("seek")(source_offset);
+        py::dict entry = write_entry_from_python(
+            name, source, size, kind, dtype, shape, metadata);
+        names_.insert(name);
+        return entry;
+    }
+
     py::dict add_bytes(const std::string& name,
                        const py::bytes& input,
                        const std::string& kind,
@@ -257,6 +287,67 @@ private:
         }
     }
 
+    py::dict write_entry_from_python(const std::string& name,
+                                     const py::object& source,
+                                     std::uint64_t size,
+                                     const std::string& kind,
+                                     const std::string& dtype,
+                                     const std::vector<std::int64_t>& shape,
+                                     const py::dict& metadata) {
+        py::object whole_hash = new_sha256();
+        py::list chunks;
+        std::uint64_t logical_offset = 0;
+        std::vector<char> buffer(static_cast<std::size_t>(
+            std::min(kCopyBufferBytes, chunk_bytes_)));
+
+        while (logical_offset < size) {
+            const auto chunk_length = std::min(chunk_bytes_, size - logical_offset);
+            align_output();
+            const auto file_offset = tell_output();
+            py::object chunk_hash = new_sha256();
+            std::uint64_t remaining = chunk_length;
+            while (remaining > 0) {
+                const auto request = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(remaining, buffer.size()));
+                const auto block = py::cast<std::string>(source.attr("read")(request));
+                if (block.empty() || block.size() > request) {
+                    throw std::runtime_error("stream ended early or returned too many bytes");
+                }
+                output_.write(block.data(), static_cast<std::streamsize>(block.size()));
+                if (!output_) {
+                    throw std::runtime_error("failed writing NXS tensor payload");
+                }
+                update_sha256(chunk_hash, block.data(), block.size());
+                update_sha256(whole_hash, block.data(), block.size());
+                remaining -= block.size();
+            }
+            py::dict chunk;
+            chunk["offset"] = file_offset;
+            chunk["length"] = chunk_length;
+            chunk["logical_offset"] = logical_offset;
+            chunk["sha256"] = hexdigest(chunk_hash);
+            chunks.append(std::move(chunk));
+            logical_offset += chunk_length;
+        }
+
+        py::dict entry;
+        entry["name"] = name;
+        entry["kind"] = kind;
+        entry["nbytes"] = size;
+        entry["sha256"] = hexdigest(whole_hash);
+        entry["chunks"] = std::move(chunks);
+        if (!dtype.empty()) {
+            entry["dtype"] = dtype;
+        }
+        if (kind == "tensor" || !shape.empty()) {
+            entry["shape"] = shape;
+        }
+        if (metadata.size() > 0) {
+            entry["metadata"] = metadata;
+        }
+        return entry;
+    }
+
     py::dict write_entry(const std::string& name,
                          std::istream& source,
                          std::uint64_t size,
@@ -346,6 +437,10 @@ PYBIND11_MODULE(_core, module) {
              py::arg("output_path"), py::arg("chunk_bytes"))
         .def("add_file_range", &NativeWriter::add_file_range,
              py::arg("name"), py::arg("source_path"), py::arg("source_offset"),
+             py::arg("size"), py::arg("kind"), py::arg("dtype"), py::arg("shape"),
+             py::arg("metadata"))
+        .def("add_stream", &NativeWriter::add_stream,
+             py::arg("name"), py::arg("source"), py::arg("source_offset"),
              py::arg("size"), py::arg("kind"), py::arg("dtype"), py::arg("shape"),
              py::arg("metadata"))
         .def("add_bytes", &NativeWriter::add_bytes,

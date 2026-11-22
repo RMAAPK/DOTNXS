@@ -38,7 +38,7 @@ python -m pip install 'dotnxs[hf]'
 dotnxs convert hf thinkingmachines/Inkling-2-Mini inkling.nxs
 ```
 
-`hf2nxs` downloads the selected repository snapshot into the Hugging Face cache, then streams files from disk into one `.nxs` archive; it does not yet fetch individual tensor ranges directly from remote storage. GGUF and Parquet converters and model inference runtime remain future work.
+`hf2nxs` reads the Hub file index and fetches Safetensors tensor ranges over HTTP into one `.nxs` archive, avoiding a full local checkpoint copy. Range requests must be supported by the serving endpoint. GGUF and Parquet converters and model inference runtime remain future work.
 
 Run the converter tests with:
 

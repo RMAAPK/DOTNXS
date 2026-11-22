@@ -108,18 +108,28 @@ class NxsWriter:
 
         if self._native_writer is not None:
             source_path = getattr(source, "name", None)
-            if not isinstance(source_path, (str, os.PathLike)):
-                raise TypeError("native writer requires a path-backed source stream")
-            entry = self._native_writer.add_file_range(
-                name,
-                os.fspath(source_path),
-                source_offset,
-                size,
-                kind,
-                dtype or "",
-                list(shape or []),
-                metadata or {},
-            )
+            if isinstance(source_path, (str, os.PathLike)):
+                entry = self._native_writer.add_file_range(
+                    name,
+                    os.fspath(source_path),
+                    source_offset,
+                    size,
+                    kind,
+                    dtype or "",
+                    list(shape or []),
+                    metadata or {},
+                )
+            else:
+                entry = self._native_writer.add_stream(
+                    name,
+                    source,
+                    source_offset,
+                    size,
+                    kind,
+                    dtype or "",
+                    list(shape or []),
+                    metadata or {},
+                )
             self._entries.append(entry)
             self._names.add(name)
             return entry
