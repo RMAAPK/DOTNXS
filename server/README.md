@@ -13,6 +13,6 @@ The C++ service has `/ping`, which returns `pong` without initializing the model
 
 ## Free-plan limits
 
-Render's Free web service has 512 MB RAM and spins down after 15 minutes without inbound traffic. The heartbeat can keep it awake, but it consumes the workspace's monthly Free instance hours (750 hours total) and does not bypass that limit. The model worker's Torch runtime, 200 MiB NXS chunk cache, current layer, experts, and KV state may exceed 512 MB; if it OOMs, use a larger Render plan. Render's 2 CPU / 4 GB `2c-4g` plan is paid.
+Render's Free web service has 512 MB RAM and spins down after 15 minutes without inbound traffic. The heartbeat can keep it awake, but it consumes the workspace's monthly Free instance hours (750 hours total) and does not bypass that limit. The Torch worker plus active weights may exceed 512 MB, and Render may suspend free services for unusually high outbound traffic. A real decoder-layer check fetched about 234 MB; full token generation can require several GB of streamed weights. Ping does not remove those RAM or bandwidth limits. Render's 2 CPU / 4 GB `2c-4g` plan is paid.
 
 The API serializes generation, caps prompts at 64 tokens and replies at 12 tokens, and is text-only. Inkling executes 48 layer applications per token, so CPU response latency can be high. The public NXS repo does not require `HF_TOKEN`; if you add one for a private repo, set it as a Render secret, not in source.

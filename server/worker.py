@@ -11,7 +11,7 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -106,16 +106,15 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@app.post("/v1/chat")
-async def chat(request: Request, payload: ChatRequest):
+async def _chat_response(payload: ChatRequest):
     runner = app.state.runner
     if runner is None:
         detail = app.state.runner_error or "Inkling is still loading; retry shortly."
         raise HTTPException(status_code=503, detail=detail, headers={"Retry-After": "30"})
     if payload.messages[-1].role != "user":
         raise HTTPException(status_code=422, detail="The final conversation message must be from the user.")
-    if sum(len(message.content) for message in payload.messages) > 8000:
-        raise HTTPException(status_code=413, detail="Conversation text exceeds the 8000-character limit.")
+    if sum(len(message.content) for message in payload.messages) > 3000:
+        raise HTTPException(status_code=413, detail="Conversation text exceeds the 3000-character limit.")
     if not app.state.generation_lock.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="The CPU model is busy; retry when the current reply finishes.")
 
@@ -168,6 +167,20 @@ async def chat(request: Request, payload: ChatRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+@app.post("/v1/chat")
+async def chat(payload: ChatRequest):
+    return await _chat_response(payload)
+
+
+@app.get("/v1/chat-stream")
+async def chat_stream(payload: str = Query(..., max_length=12000)):
+    try:
+        parsed = ChatRequest.model_validate_json(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid encoded chat payload.") from exc
+    return await _chat_response(parsed)
 
 
 if __name__ == "__main__":
