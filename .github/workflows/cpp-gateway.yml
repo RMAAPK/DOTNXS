@@ -11,12 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile C++ HTTP gateway
         run: g++ -O2 -std=c++17 -pthread -Iserver server/cpp_server.cpp -o "$RUNNER_TEMP/dotnxs-gateway"
-      - name: Verify pong and health endpoints
+      - name: Verify pong, health, and streamed chat proxy
         shell: bash
         run: |
+          python tests/fake_sse_worker.py 18081 > "$RUNNER_TEMP/fake-worker.log" 2>&1 &
+          worker_pid=$!
           PORT=18080 DOTNXS_WORKER_PORT=18081 "$RUNNER_TEMP/dotnxs-gateway" > "$RUNNER_TEMP/dotnxs-gateway.log" 2>&1 &
-          pid=$!
-          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          gateway_pid=$!
+          trap 'kill "$gateway_pid" "$worker_pid" 2>/dev/null || true' EXIT
           for attempt in {1..20}; do
             if response="$(curl --silent --show-error --max-time 2 http://127.0.0.1:18080/ping 2>/dev/null)" && [[ "$response" == "pong" ]]; then
               break
@@ -24,4 +26,7 @@ jobs:
             sleep 1
           done
           test "$(curl --silent --show-error http://127.0.0.1:18080/ping)" = "pong"
-          curl --silent --show-error http://127.0.0.1:18080/health | grep -q '"status":"loading"'
+          curl --silent --show-error http://127.0.0.1:18080/health | grep -q '"status":"ready"'
+          reply="$(curl --silent --show-error --no-buffer --max-time 30 -H 'Content-Type: application/json' --data '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:18080/v1/chat)"
+          grep -q 'event: token' <<< "$reply"
+          grep -q 'gateway smoke reply' <<< "$reply"
