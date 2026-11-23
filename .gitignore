@@ -12,8 +12,11 @@ GitHub CLI/
 .env.*
 !.env.example
 
-# Python caches and build artifacts
+# Python/Node caches and build artifacts
 __pycache__/
+node_modules/
+npm-cache/
+website/dist/
 *.py[cod]
 .pytest_cache/
 *.egg-info/

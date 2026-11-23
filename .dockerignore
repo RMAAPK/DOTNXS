@@ -1,0 +1,20 @@
+.git
+.cache
+AppData
+.kaggle
+.unsloth_attachments
+Google
+Microsoft
+GitHub CLI
+unsloth-tmp
+build
+dist
+*.egg-info
+*.whl
+__pycache__
+*.py[cod]
+.pytest_cache
+.env
+.env.*
+website/node_modules
+website/dist

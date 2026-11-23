@@ -44,15 +44,18 @@ dotnxs convert hf thinkingmachines/Inkling-2-Mini inkling.nxs
 
 ## Experimental Inkling runtime and Render demo
 
-Install the CPU runtime dependencies with `python -m pip install '.[runtime]'`. The experimental text runner uses Transformers' Inkling architecture and fetches the checkpoint from `rmaaorg/Inkling-2-Mini-NXS`; it does not stage the whole model locally. The demo source is split into:
+Install the CPU runtime dependencies with `python -m pip install '.[runtime]'`. The experimental text runner uses Transformers' Inkling architecture and fetches the checkpoint from `rmaaorg/Inkling-2-Mini-NXS`; it does not stage the whole model locally. The Render demo source is split into:
 
-- `website/`: static chat frontend for `dotnxs.rmaa.pk`.
-- `server/`: FastAPI/SSE CPU API that streams responses from the NXS-backed runner.
-- `render.yaml`: Render Blueprint for the static site and API service.
+- `website/`: React Native Web frontend built with Vite for `dotnxs.rmaa.pk`.
+- `server/`: C++ HTTP gateway and Dockerfile, plus a private Python worker that runs the official Transformers model math.
 
-The API Blueprint selects Render's `2c-4g` plan (2 CPUs, 4 GB RAM); this is a paid plan. The 200 MiB setting bounds the verified NXS chunk cache, not all process memory. The model executes 48 layer applications per token, so response latency can be high.
+Create a Render Static Site from the `website/` directory and a Docker Web Service from `server/Dockerfile` (Docker context: repository root). The C++ gateway answers `/ping` with `pong` and proxies chat requests to the local model worker. The Render API hostname is set in `website/public/config.js`.
 
-Validation so far: tokenizer initialization and one real decoder layer have run using the public NXS archive. A full 48-application end-to-end chat generation has not yet completed or been performance-validated.
+Render's Free web plan has 512 MB RAM; that may be insufficient for the Torch worker and its temporary weights even with a 200 MiB NXS chunk-cache cap. The Free service also sleeps after 15 minutes without inbound requests. `website/public/ping.html` offers a ten-minute heartbeat while open, and `.github/workflows/render-ping.yml` can ping `/ping` on a schedule. Scheduled pings consume the workspace's Free instance hours; they do not bypass Render's monthly limits.
+
+The server may use a paid Render plan for reliable RAM. The 200 MiB value bounds verified archive chunks, not total process memory. Inkling executes 48 layer applications per generated token, so CPU responses can be slow.
+
+Validation so far: tokenizer initialization and one real decoder layer have run using the public NXS archive. A GitHub Actions workflow is configured to compile and smoke-test the C++ gateway; the Docker image and full 48-application chat generation have not yet completed end-to-end validation.
 
 Run the converter and runtime unit tests with:
 

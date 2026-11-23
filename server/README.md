@@ -1,19 +1,18 @@
 # DOTNXS Render server
 
-This directory contains the Render-facing FastAPI service. The frontend lives in `website/`; both services are declared in the repository-root `render.yaml`.
+`cpp_server.cpp` is the public C++ HTTP gateway. It provides `/ping` (`pong`) and `/health`, and forwards `/v1/chat` to the private Python worker in `worker.py`. The Python worker retains the official Transformers model math; the gateway does not pretend to be a C++ Inkling inference engine.
 
-## Deploy from GitHub
+## Manual Render setup
 
-1. In Render, create a **Blueprint** and connect `RMAAPK/DOTNXS` on the `main` branch.
-2. Review `render.yaml`. It defines `dotnxs-inkling-api` (FastAPI) and `dotnxs-website` (static site).
-3. The API uses Render plan `2c-4g` (2 CPUs, 4 GB RAM). This is a paid compute plan; the free 512 MB plan is not suitable for PyTorch plus the streamed model runtime. Do not sync the Blueprint unless that plan and its cost are acceptable.
-4. The static site requests `dotnxs.rmaa.pk`. Add/verify the DNS record Render shows for that domain.
-5. The website's `website/config.js` points to `https://dotnxs-inkling-api.onrender.com`. If Render assigns a different service hostname, update that file and redeploy.
+1. Create a **Static Site** from `RMAAPK/DOTNXS`, root directory `website`, build command `npm ci --no-audit --no-fund && npm run build`, publish directory `dist`. Add custom domain `dotnxs.rmaa.pk` and configure the DNS record Render provides.
+2. Create a **Web Service** from the same repository, runtime **Docker**, Dockerfile path `server/Dockerfile`, Docker context repository root. The image starts the C++ gateway and its local Python inference worker.
+3. The website uses `https://dotnxs-inkling-api.onrender.com` from `website/public/config.js`; if Render assigns a different service URL, update it and redeploy the static site.
+4. Set the service environment variables if needed: `NXS_REPO_ID`, `NXS_FILENAME`, `DOTNXS_CACHE_BYTES`, `DOTNXS_MAX_CONTEXT_TOKENS`, `DOTNXS_MAX_NEW_TOKENS`, and `CORS_ORIGINS`. Defaults are set for the public NXS repo and `dotnxs.rmaa.pk`.
 
-Render installs the DOTNXS `runtime` extra and starts `uvicorn server.app:app` on `$PORT`. `server/requirements.txt` pins the CPU-only PyTorch wheel. The service exposes `GET /health` and `POST /v1/chat` (server-sent events). It reads the public NXS archive directly from Hugging Face; it does not clone or download the full model checkpoint. The server's verified NXS chunk LRU cache is fixed at 200 MiB.
+The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-inkling-api.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge.
 
-## Limits and latency
+## Free-plan limits
 
-The API serializes generation, caps prompts at 64 tokens and replies at 12 tokens, and is text-only. Inkling 2 Mini executes 48 layer applications per token. NXS streaming keeps the chunk cache bounded but does not make the model lightweight; first responses can be slow. The Render instance also needs enough RAM for PyTorch, the current layer, selected experts, activations, and KV state in addition to the 200 MiB archive cache.
+Render's Free web service has 512 MB RAM and spins down after 15 minutes without inbound traffic. The heartbeat can keep it awake, but it consumes the workspace's monthly Free instance hours (750 hours total) and does not bypass that limit. The model worker's Torch runtime, 200 MiB NXS chunk cache, current layer, experts, and KV state may exceed 512 MB; if it OOMs, use a larger Render plan. Render's 2 CPU / 4 GB `2c-4g` plan is paid.
 
-`HF_TOKEN` is optional because the archive repo is public. If you add one, configure it as a secret in Render, never in `render.yaml` or the static website.
+The API serializes generation, caps prompts at 64 tokens and replies at 12 tokens, and is text-only. Inkling executes 48 layer applications per token, so CPU response latency can be high. The public NXS repo does not require `HF_TOKEN`; if you add one for a private repo, set it as a Render secret, not in source.

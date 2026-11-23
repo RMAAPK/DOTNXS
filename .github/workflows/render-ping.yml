@@ -1,0 +1,32 @@
+name: Keep Render free service awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      RENDER_PING_URL: ${{ vars.RENDER_PING_URL }}
+    steps:
+      - name: Ping the Render API
+        shell: bash
+        run: |
+          if [[ -z "$RENDER_PING_URL" ]]; then
+            echo "Set the GitHub repository variable RENDER_PING_URL to the Render /ping URL."
+            exit 0
+          fi
+          for attempt in {1..8}; do
+            response="$(curl --silent --show-error --fail --max-time 90 "$RENDER_PING_URL" || true)"
+            if [[ "$response" == "pong" ]]; then
+              echo "Render replied pong."
+              exit 0
+            fi
+            echo "Render is waking up (attempt $attempt); retrying."
+            sleep 10
+          done
+          echo "Render did not return pong."
+          exit 1

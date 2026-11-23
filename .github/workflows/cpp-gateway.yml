@@ -1,0 +1,27 @@
+name: C++ gateway
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile C++ HTTP gateway
+        run: g++ -O2 -std=c++17 -pthread -Iserver server/cpp_server.cpp -o "$RUNNER_TEMP/dotnxs-gateway"
+      - name: Verify pong and health endpoints
+        shell: bash
+        run: |
+          PORT=18080 DOTNXS_WORKER_PORT=18081 "$RUNNER_TEMP/dotnxs-gateway" > "$RUNNER_TEMP/dotnxs-gateway.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if response="$(curl --silent --show-error --max-time 2 http://127.0.0.1:18080/ping 2>/dev/null)" && [[ "$response" == "pong" ]]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(curl --silent --show-error http://127.0.0.1:18080/ping)" = "pong"
+          curl --silent --show-error http://127.0.0.1:18080/health | grep -q '"status":"loading"'
