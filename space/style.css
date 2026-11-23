@@ -67,7 +67,6 @@ h1 span { color: #a99aff; }
   background: linear-gradient(145deg, rgba(21,29,52,.94), rgba(12,17,32,.96));
   box-shadow: 0 18px 55px rgba(0,0,0,.19);
 }
-.stream-panel { padding: 24px; }
 .chat-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, .8fr); gap: 16px; align-items: start; }
 .chat-panel { min-height: 430px; padding: 22px; display: flex; flex-direction: column; }
 .chat-messages { flex: 1; min-height: 240px; padding: 8px 0 18px; }
@@ -82,13 +81,6 @@ h1 span { color: #a99aff; }
 .cache-panel { padding: 20px; }
 .cache-panel h2 { font-size: 16px; }
 .cache-panel .hint { margin-bottom: 14px; }
-.cache-meter { height: 7px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
-.cache-meter-fill { display: block; width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), #a899ff); transition: width .2s ease; }
-.cache-meter-label { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--muted); font: 9px "DM Mono", monospace; }
-.cache-meter-label strong { color: var(--cyan); }
-.diagnostics { margin-top: 18px; }
-.diagnostics summary { cursor: pointer; padding: 12px 2px; color: #8792ac; font: 10px "DM Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
-.diagnostics .stream-panel { margin-top: 8px; }
 .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
 h2 { margin: 8px 0 0; font-size: 20px; letter-spacing: -.03em; }
 .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 10px "DM Mono", monospace; white-space: nowrap; }
@@ -100,44 +92,10 @@ h2 { margin: 8px 0 0; font-size: 20px; letter-spacing: -.03em; }
 .status-pill.fail .status-dot { background: var(--red); }
 @keyframes pulse { to { opacity: .35; } }
 
-.field-label { display: block; margin-bottom: 8px; color: #c5cde0; font-size: 12px; font-weight: 700; }
-.archive-target {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px; padding: 13px 14px; border: 1px solid var(--line);
-  border-radius: 12px; background: #090e1b;
-}
-.archive-target strong { display: block; color: #eef2ff; font: 12px "DM Mono", monospace; }
-.archive-target .hint { margin: 5px 0 0; }
 .primary-button { border: 0; border-radius: 10px; padding: 0 15px; color: #071318; background: linear-gradient(135deg, #72eee0, #a899ff); font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
 .primary-button:hover { filter: brightness(1.08); }
 .primary-button:disabled { cursor: wait; opacity: .62; }
 .hint { color: var(--muted); font-size: 11px; line-height: 1.65; }
-.stream-panel > .hint { margin: 9px 0 18px; }
-.cache-control {
-  display: flex; align-items: center; gap: 12px; margin: 0 0 18px; padding: 12px 14px;
-  border: 1px solid rgba(100,229,218,.16); border-radius: 12px; background: rgba(100,229,218,.035);
-}
-.cache-icon { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 9px; color: var(--cyan); background: rgba(100,229,218,.1); }
-.cache-control strong { display: block; color: #dce7f5; font-size: 11px; }
-.cache-control div span { display: block; margin-top: 3px; color: var(--muted); font: 9px "DM Mono", monospace; }
-.cache-cap { margin-left: auto; color: var(--cyan); font: 12px "DM Mono", monospace; white-space: nowrap; }
-.error-box { margin: 18px 0; padding: 12px; border: 1px solid rgba(255,114,140,.3); border-radius: 10px; color: #ffc0cd; background: rgba(255,114,140,.07); font: 11px/1.6 "DM Mono", monospace; overflow-wrap: anywhere; }
-.results { margin: 20px 0; }
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
-.metric { padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.025); }
-.metric span { display: block; color: var(--muted); font-size: 10px; }
-.metric strong { display: block; margin-top: 8px; font: 13px "DM Mono", monospace; overflow-wrap: anywhere; }
-.verified-row { display: flex; align-items: center; gap: 9px; margin-top: 14px; color: var(--green); font-size: 12px; font-weight: 700; }
-.checkmark { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: rgba(105,227,165,.12); }
-.sample-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-top: 12px; color: #dbe3f5; font-size: 11px; }
-.sample-label { color: var(--muted); }
-.sample-row code { color: #c9bdff; overflow-wrap: anywhere; }
-
-.log-wrap { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-.log-title { display: flex; justify-content: space-between; color: #7f8aa5; font: 9px "DM Mono", monospace; letter-spacing: .1em; }
-.request-log { min-height: 48px; max-height: 160px; margin: 10px 0 0; padding-left: 23px; color: #9da9c2; font: 10px/1.8 "DM Mono", monospace; overflow: auto; }
-.request-log li::marker { color: var(--cyan); }
-.log-placeholder { list-style: none; margin-left: -23px; color: #707b94; }
 .side-column { display: grid; gap: 16px; }
 .model-panel { padding: 20px; }
 .model-stat { display: flex; align-items: baseline; gap: 10px; padding: 13px 0 10px; border-bottom: 1px solid var(--line); }
@@ -159,13 +117,10 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 24px
   nav { gap: 12px; font-size: 10px; }
   .hero { padding: 38px 0 25px; }
   .layout, .chat-layout { grid-template-columns: 1fr; }
-  .stream-panel, .chat-panel { padding: 17px; }
+  .chat-panel { padding: 17px; }
   .chat-composer { align-items: stretch; flex-direction: column; }
   .chat-foot { flex-direction: column; }
-  .archive-target { align-items: flex-start; flex-direction: column; }
   .primary-button { min-height: 42px; width: 100%; }
-  .cache-control { align-items: flex-start; }
-  .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .runtime-panel { align-items: flex-start; flex-wrap: wrap; }
   .coming-pill { margin-left: 54px; }
   footer { flex-direction: column; }
