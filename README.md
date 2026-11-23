@@ -11,8 +11,10 @@ The CLI wraps a C++17/pybind11 archive writer, while Python handles conversion a
 ## Install
 
 ```bash
-python -m pip install dotnxs
+python -m pip install --upgrade dotnxs
 ```
+
+On Windows, `pip` can install console scripts into the per-user `Scripts` directory while that directory is absent from `PATH`. If PowerShell says `dotnxs` is not recognized, the package is still installed; run `python -m dotnxs.cli --help` or add the `Scripts` directory shown in pip's warning to `PATH`. The source package also supports `python -m dotnxs`.
 
 ## CLI
 
