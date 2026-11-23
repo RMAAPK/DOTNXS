@@ -1,0 +1,2 @@
+dotnxs[runtime] @ git+https://github.com/RMAAPK/DOTNXS.git@main
+gradio>=5.0.0

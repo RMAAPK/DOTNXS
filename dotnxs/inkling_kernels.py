@@ -123,13 +123,24 @@ def bf16_to_float32(data: bytes | bytearray | memoryview | np.ndarray) -> np.nda
     return expanded.view(np.float32)
 
 
-def interleave_gate_up_rows(weight: np.ndarray) -> np.ndarray:
-    """Convert checkpoint's contiguous gate/up rows to the HF interleaved layout."""
+def rms_norm(hidden_states: np.ndarray, weight: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Apply the weighted RMSNorm used by Inkling's embedding and output head."""
+    values = np.asarray(hidden_states, dtype=np.float32)
+    scale = np.asarray(weight, dtype=np.float32)
+    if values.shape != scale.shape or values.ndim != 1:
+        raise ValueError("RMSNorm expects matching one-dimensional hidden and weight vectors")
+    if not np.isfinite(eps) or eps <= 0:
+        raise ValueError("RMSNorm epsilon must be finite and positive")
+    return values * np.float32(1.0 / np.sqrt(np.mean(values * values) + eps)) * scale
+
+
+def deinterleave_gate_up_rows(weight: np.ndarray) -> np.ndarray:
+    """Convert checkpoint's alternating gate/up rows to contiguous HF gate/up rows."""
     matrix = np.asarray(weight)
     if matrix.ndim != 2 or matrix.shape[0] % 2:
         raise ValueError("gate/up projection must be a matrix with an even row count")
     half = matrix.shape[0] // 2
-    return matrix.reshape(2, half, matrix.shape[1]).transpose(1, 0, 2).reshape(matrix.shape)
+    return matrix.reshape(half, 2, matrix.shape[1]).transpose(1, 0, 2).reshape(matrix.shape)
 
 
 def select_experts(
@@ -162,6 +173,14 @@ def select_experts(
     return selected.astype(np.int64), weights.astype(np.float32)
 
 
+def round_bf16(values: np.ndarray) -> np.ndarray:
+    """Round float32 values to BF16 precision and return them in float32 storage."""
+    values = np.ascontiguousarray(values, dtype=np.float32)
+    bits = values.view(np.uint32)
+    rounded = bits + np.uint32(0x7FFF) + ((bits >> 16) & 1)
+    return (rounded & np.uint32(0xFFFF0000)).view(np.float32)
+
+
 def run_expert_mlp(
     hidden_states: np.ndarray,
     gate_up_weight: np.ndarray,
@@ -169,12 +188,13 @@ def run_expert_mlp(
     *,
     gate_softcap: float = 4.0,
     up_softcap: float = 25.0,
+    bfloat16: bool = False,
 ) -> np.ndarray:
     """Run one Inkling SwiGLU expert using decoded float32 matrices.
 
-    ``gate_up_weight`` is in the HF interleaved row layout: gate and up rows
-    alternate. The input and output are single-token vectors; this deliberately
-    keeps the reference path small enough to consume one expert at a time.
+    ``gate_up_weight`` is in the HF layout: all gate rows followed by all up
+    rows. The input and output are single-token vectors; this deliberately keeps
+    the reference path small enough to consume one expert at a time.
     """
     x = np.asarray(hidden_states, dtype=np.float32).reshape(-1)
     gate_up = np.asarray(gate_up_weight, dtype=np.float32)
@@ -189,9 +209,15 @@ def run_expert_mlp(
     if gate_softcap <= 0 or up_softcap <= 0:
         raise ValueError("expert softcap values must be positive")
 
+    if bfloat16:
+        x = round_bf16(x)
+        gate_up = round_bf16(gate_up)
+        down = round_bf16(down)
     projections = gate_up @ x
-    gate = projections[0::2]
-    up = projections[1::2]
+    if bfloat16:
+        projections = round_bf16(projections)
+    gate = projections[:intermediate]
+    up = projections[intermediate:]
     gate = gate_softcap * np.tanh(gate / gate_softcap)
     up = up_softcap * np.tanh(up / up_softcap)
     # Numerically stable SiLU: g * sigmoid(g).
@@ -200,7 +226,43 @@ def run_expert_mlp(
     sigmoid_gate[positive] = 1.0 / (1.0 + np.exp(-gate[positive]))
     exp_gate = np.exp(gate[~positive])
     sigmoid_gate[~positive] = exp_gate / (1.0 + exp_gate)
-    return down @ (gate * sigmoid_gate * up)
+    activations = gate * sigmoid_gate * up
+    if bfloat16:
+        activations = round_bf16(activations)
+    output = down @ activations
+    return round_bf16(output) if bfloat16 else output
+
+
+def run_selected_experts(
+    hidden_states: np.ndarray,
+    selected_experts: np.ndarray,
+    routing_weights: np.ndarray,
+    *,
+    expert_loader,
+    gate_softcap: float = 4.0,
+    up_softcap: float = 25.0,
+    bfloat16: bool = True,
+) -> np.ndarray:
+    """Execute routed experts for a token batch, materializing one expert at a time."""
+    x = np.asarray(hidden_states, dtype=np.float32)
+    ids = np.asarray(selected_experts, dtype=np.int64)
+    weights = np.asarray(routing_weights, dtype=np.float32)
+    if x.ndim != 2 or ids.ndim != 2 or ids.shape != weights.shape or ids.shape[0] != x.shape[0]:
+        raise ValueError("hidden states, selected experts, and routing weights have incompatible shapes")
+    output = np.zeros_like(x, dtype=np.float32)
+    for expert_id in np.unique(ids):
+        gate_up_weight, down_weight = expert_loader(int(expert_id))
+        token_indices, slots = np.where(ids == expert_id)
+        for token_index, slot in zip(token_indices, slots):
+            output[token_index] += weights[token_index, slot] * run_expert_mlp(
+                x[token_index],
+                gate_up_weight,
+                down_weight,
+                gate_softcap=gate_softcap,
+                up_softcap=up_softcap,
+                bfloat16=bfloat16,
+            )
+    return output
 
 
 def run_sparse_moe(
@@ -225,17 +287,15 @@ def run_sparse_moe(
         top_k=top_k,
         route_scale=route_scale,
     )
-    output = np.zeros(x.shape, dtype=np.float32)
-    for expert_id, route_weight in zip(expert_ids, route_weights):
-        gate_up_weight, down_weight = expert_loader(int(expert_id))
-        output += route_weight * run_expert_mlp(
-            x,
-            gate_up_weight,
-            down_weight,
-            gate_softcap=gate_softcap,
-            up_softcap=up_softcap,
-        )
-    return output
+    return run_selected_experts(
+        x[None, :],
+        expert_ids[None, :],
+        route_weights[None, :],
+        expert_loader=expert_loader,
+        gate_softcap=gate_softcap,
+        up_softcap=up_softcap,
+        bfloat16=False,
+    )[0]
 
 
 __all__ = [
@@ -244,8 +304,11 @@ __all__ = [
     "decode_e8m0",
     "dequantize_mxfp8",
     "dequantize_nvfp4",
-    "interleave_gate_up_rows",
+    "deinterleave_gate_up_rows",
     "run_expert_mlp",
+    "run_selected_experts",
     "run_sparse_moe",
+    "round_bf16",
+    "rms_norm",
     "select_experts",
 ]

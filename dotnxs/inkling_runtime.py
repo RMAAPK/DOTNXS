@@ -109,6 +109,128 @@ class Inkling2MiniWeights:
             raise ValueError(f"layer {layer_id} does not expose the expected Inkling expert weight tensors")
         return tensors
 
+    def embed_token(self, token_id: int):
+        """Read one BF16 embedding row and apply the checkpoint's embedding RMSNorm."""
+        try:
+            from .inkling_kernels import bf16_to_float32, rms_norm, round_bf16
+        except ImportError as exc:
+            raise RuntimeError("Inkling CPU inference requires NumPy; install dotnxs[runtime]") from exc
+
+        name = "model.llm.embed.weight"
+        entry = self.archive.get_entry(name)
+        shape = entry.get("shape", [])
+        if entry.get("dtype") != "BF16" or len(shape) != 2:
+            raise ValueError("Inkling token embeddings must be a rank-2 BF16 tensor")
+        vocab_size, hidden_size = shape
+        if not isinstance(token_id, int) or isinstance(token_id, bool) or not 0 <= token_id < vocab_size:
+            raise ValueError(f"token_id must be in [0, {vocab_size})")
+        row_bytes = hidden_size * 2
+        start = token_id * row_bytes
+        embedded = bf16_to_float32(self.archive.read_entry_range(name, start, row_bytes))
+
+        norm_name = "model.llm.embed_norm.weight"
+        norm_entry = self.archive.get_entry(norm_name)
+        if norm_entry.get("dtype") != "BF16" or norm_entry.get("shape") != [hidden_size]:
+            raise ValueError("Inkling embedding RMSNorm weight has an invalid dtype or shape")
+        norm_weight = bf16_to_float32(self.archive.read_entry(norm_name))
+        eps = float(self.config["text_config"].get("rms_norm_eps", 1e-6))
+        return round_bf16(rms_norm(embedded, norm_weight, eps))
+
+    def project_logits(self, hidden_states, *, block_rows: int = 128, apply_final_norm: bool = True):
+        """Stream the BF16 output head in row blocks; never load the full vocab matrix.
+
+        Set ``apply_final_norm=False`` when the caller already ran the model's final
+        RMSNorm, as the Transformers causal-LM forward does.
+        """
+        try:
+            import numpy as np
+            from .inkling_kernels import bf16_to_float32, rms_norm, round_bf16
+        except ImportError as exc:
+            raise RuntimeError("Inkling CPU inference requires NumPy; install dotnxs[runtime]") from exc
+
+        if not isinstance(block_rows, int) or isinstance(block_rows, bool) or block_rows <= 0:
+            raise ValueError("block_rows must be a positive integer")
+        text_config = self.config["text_config"]
+        name = "model.llm.unembed.weight"
+        entry = self.archive.get_entry(name)
+        shape = entry.get("shape", [])
+        if entry.get("dtype") != "BF16" or len(shape) != 2:
+            raise ValueError("Inkling output projection must be a rank-2 BF16 tensor")
+        padded_vocab_size, hidden_size = shape
+        hidden = np.asarray(hidden_states, dtype=np.float32).reshape(-1)
+        if hidden.size != hidden_size:
+            raise ValueError(f"hidden state must contain {hidden_size} values")
+        vocab_size = int(text_config.get("unpadded_vocab_size", padded_vocab_size))
+        if not 0 < vocab_size <= padded_vocab_size:
+            raise ValueError("unpadded vocabulary size is outside the output tensor")
+
+        if apply_final_norm:
+            norm_name = "model.llm.norm.weight"
+            norm_entry = self.archive.get_entry(norm_name)
+            if norm_entry.get("dtype") != "BF16" or norm_entry.get("shape") != [hidden_size]:
+                raise ValueError("Inkling final RMSNorm weight has an invalid dtype or shape")
+            norm_weight = bf16_to_float32(self.archive.read_entry(norm_name))
+            normalized = rms_norm(hidden, norm_weight, float(text_config.get("rms_norm_eps", 1e-6)))
+        else:
+            normalized = hidden
+        normalized = round_bf16(normalized)
+
+        logits = np.empty(vocab_size, dtype=np.float32)
+        row_bytes = hidden_size * 2
+        prefetch_rows = 8192
+        for prefetch_start in range(0, vocab_size, prefetch_rows):
+            prefetch_count = min(prefetch_rows, vocab_size - prefetch_start)
+            self.archive.prefetch_entry_ranges(
+                [(name, prefetch_start * row_bytes, prefetch_count * row_bytes)],
+                max_workers=16,
+            )
+            prefetch_end = prefetch_start + prefetch_count
+            for row_start in range(prefetch_start, prefetch_end, block_rows):
+                rows = min(block_rows, prefetch_end - row_start)
+                payload = self.archive.read_entry_range(name, row_start * row_bytes, rows * row_bytes)
+                weights = bf16_to_float32(payload).reshape(rows, hidden_size)
+                logits[row_start : row_start + rows] = round_bf16(weights @ normalized)
+
+        softcap = float(text_config.get("final_logit_softcapping", 30.0))
+        return softcap * np.tanh(logits / softcap)
+
+    def prefetch_entries(self, entry_names: Iterable[str], *, max_workers: int = 16) -> dict[str, int]:
+        """Prefetch selected complete entries concurrently without expanding the cache cap."""
+        ranges = []
+        for name in dict.fromkeys(entry_names):
+            entry = self.archive.get_entry(name)
+            ranges.append((name, 0, entry["nbytes"]))
+        return self.archive.prefetch_entry_ranges(ranges, max_workers=max_workers)
+
+    def prefetch_routed_experts(
+        self, layer_id: int, expert_ids: Iterable[int], *, max_workers: int = 16
+    ) -> dict[str, int]:
+        """Prefetch just the tensors/ranges for a selected expert set, in parallel."""
+        ids = list(dict.fromkeys(expert_ids))
+        if len(ids) > self.experts_per_token:
+            raise ValueError(
+                f"received {len(ids)} experts, but config routes only {self.experts_per_token} per token"
+            )
+        if any(not isinstance(expert_id, int) or isinstance(expert_id, bool) or not 0 <= expert_id < self.num_experts for expert_id in ids):
+            raise ValueError(f"expert ids must be in [0, {self.num_experts})")
+        prefix = f"model.llm.layers.{layer_id}.mlp.experts."
+        ranges = []
+        for suffix in _PER_EXPERT_TENSORS:
+            name = prefix + suffix
+            if name not in self.entry_names:
+                continue
+            entry = self.archive.get_entry(name)
+            if entry["nbytes"] % self.num_experts:
+                raise ValueError(f"expert tensor {name!r} is not evenly divisible by expert count")
+            expert_bytes = entry["nbytes"] // self.num_experts
+            ranges.extend((name, expert_id * expert_bytes, expert_bytes) for expert_id in ids)
+        for suffix in _SHARED_EXPERT_TENSORS:
+            name = prefix + suffix
+            if name in self.entry_names:
+                entry = self.archive.get_entry(name)
+                ranges.append((name, 0, entry["nbytes"]))
+        return self.archive.prefetch_entry_ranges(ranges, max_workers=max_workers)
+
     def iter_routed_experts(
         self, layer_id: int, expert_ids: Iterable[int]
     ) -> Iterator[tuple[int, dict[str, bytes]]]:
@@ -140,7 +262,7 @@ class Inkling2MiniWeights:
             from .inkling_kernels import (
                 dequantize_mxfp8,
                 dequantize_nvfp4,
-                interleave_gate_up_rows,
+                deinterleave_gate_up_rows,
             )
         except ImportError as exc:
             raise RuntimeError("Inkling CPU decoding requires NumPy; install dotnxs[runtime]") from exc
@@ -177,7 +299,7 @@ class Inkling2MiniWeights:
                 f"{w2_entry.get('dtype')!r}"
             )
 
-        return {"gate_up": interleave_gate_up_rows(w13), "down": w2}
+        return {"gate_up": deinterleave_gate_up_rows(w13), "down": w2}
 
     def run_expert(self, layer_id: int, expert_id: int, hidden_states):
         """Run one selected expert's CPU SwiGLU path from streamed NXS weights."""
@@ -192,6 +314,41 @@ class Inkling2MiniWeights:
             gate_softcap=float(text_config.get("mlp_gate_softcap", 4.0)),
             up_softcap=float(text_config.get("mlp_up_softcap", 25.0)),
         )
+
+    def run_routed_experts(
+        self, layer_id: int, hidden_states, selected_experts, routing_weights, *, bfloat16: bool = True
+    ):
+        """Execute router choices, prefetching each token's expert set concurrently."""
+        import numpy as np
+        from .inkling_kernels import run_selected_experts
+
+        text_config = self.config["text_config"]
+        hidden = np.asarray(hidden_states, dtype=np.float32)
+        expert_ids = np.asarray(selected_experts, dtype=np.int64)
+        route_weights = np.asarray(routing_weights, dtype=np.float32)
+        if hidden.ndim != 2 or expert_ids.ndim != 2 or expert_ids.shape != route_weights.shape:
+            raise ValueError("hidden states, expert ids, and routing weights have incompatible shapes")
+        if expert_ids.shape[0] != hidden.shape[0]:
+            raise ValueError("each hidden-state row must have one routed-expert row")
+
+        def load_expert(expert_id: int):
+            matrices = self.decode_expert_matrices(layer_id, expert_id)
+            return matrices["gate_up"], matrices["down"]
+
+        output = np.empty_like(hidden, dtype=np.float32)
+        for token_index in range(hidden.shape[0]):
+            ids = [int(value) for value in expert_ids[token_index]]
+            self.prefetch_routed_experts(layer_id, ids)
+            output[token_index] = run_selected_experts(
+                hidden[token_index : token_index + 1],
+                expert_ids[token_index : token_index + 1],
+                route_weights[token_index : token_index + 1],
+                expert_loader=load_expert,
+                gate_softcap=float(text_config.get("mlp_gate_softcap", 4.0)),
+                up_softcap=float(text_config.get("mlp_up_softcap", 25.0)),
+                bfloat16=bfloat16,
+            )[0]
+        return output
 
     def run_moe_layer(self, layer_id: int, hidden_states):
         """Route one token and execute its selected experts from the NXS archive."""

@@ -73,6 +73,20 @@ class RemoteNxsArchiveTests(unittest.TestCase):
             self.assertEqual(archive.read_tensor_expert("tensor", 1, 2), b"89abcdef")
             self.assertLessEqual(archive.cache_stats["used_bytes"], 4)
 
+    def test_prefetch_parallelizes_and_caches_internal_chunks(self):
+        self._write_small_nxs(chunk_bytes=4)
+        url, file_size = self._serve_archive()
+        with RemoteNxsArchive(url, file_size, cache_bytes=8) as archive:
+            result = archive.prefetch_entry_ranges([("payload", 0, 8)], max_workers=2)
+            self.assertEqual(result, {"ranges": 2, "bytes": 8})
+            before_read = archive.cache_stats
+            self.assertEqual(before_read["used_bytes"], 8)
+            self.assertEqual(archive.read_entry("payload"), b"abcdefgh")
+            after_read = archive.cache_stats
+            self.assertEqual(after_read["network_ranges"], before_read["network_ranges"])
+            self.assertEqual(after_read["used_bytes"], 8)
+            self.assertGreaterEqual(after_read["hits"], 2)
+
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "install dotnxs[runtime] for CPU inference test")
     def test_real_sparse_moe_path_over_a_local_nxs_archive(self):
         import numpy as np
@@ -85,13 +99,39 @@ class RemoteNxsArchiveTests(unittest.TestCase):
                 "num_experts_per_tok": 1,
                 "hidden_size": 16,
                 "intermediate_size": 16,
+                "vocab_size": 4,
+                "unpadded_vocab_size": 3,
+                "rms_norm_eps": 1e-6,
+                "final_logit_softcapping": 30.0,
                 "route_scale": 8.0,
                 "mlp_gate_softcap": 4.0,
                 "mlp_up_softcap": 25.0,
             },
         }
+        def as_bf16_bytes(values):
+            floats = np.asarray(values, dtype=np.float32)
+            return (floats.view(np.uint32) >> 16).astype("<u2").tobytes()
+
+        embedding = np.vstack([np.zeros(16), np.ones(16), np.arange(16), np.full(16, 2)])
+        unembedding = np.vstack([np.ones(16), np.full(16, 2), np.arange(16), np.full(16, 3)])
         with NxsWriter(self.archive_path, chunk_bytes=64) as writer:
             writer.add_bytes("asset/config.json", json.dumps(config).encode(), kind="asset")
+            writer.add_bytes(
+                "model.llm.embed.weight", as_bf16_bytes(embedding),
+                kind="tensor", dtype="BF16", shape=[4, 16]
+            )
+            writer.add_bytes(
+                "model.llm.embed_norm.weight", as_bf16_bytes(np.ones(16)),
+                kind="tensor", dtype="BF16", shape=[16]
+            )
+            writer.add_bytes(
+                "model.llm.norm.weight", as_bf16_bytes(np.ones(16)),
+                kind="tensor", dtype="BF16", shape=[16]
+            )
+            writer.add_bytes(
+                "model.llm.unembed.weight", as_bf16_bytes(unembedding),
+                kind="tensor", dtype="BF16", shape=[4, 16]
+            )
             base = "model.llm.layers.0.mlp."
             experts = base + "experts."
             writer.add_bytes(base + "gate.weight", bytes(2 * 16 * 2), kind="tensor", dtype="BF16", shape=[2, 16])
@@ -140,6 +180,17 @@ class RemoteNxsArchiveTests(unittest.TestCase):
             self.assertEqual(output.shape, (16,))
             self.assertTrue(np.isfinite(output).all())
             self.assertGreater(float(np.abs(output).sum()), 0.0)
+
+            embedding_row = weights.embed_token(1)
+            np.testing.assert_array_equal(embedding_row, np.ones(16, dtype=np.float32))
+            logits = weights.project_logits(np.ones(16, dtype=np.float32), block_rows=2)
+            self.assertEqual(logits.shape, (3,))
+            final_hidden = np.ones(16, dtype=np.float32)
+            from dotnxs.inkling_kernels import round_bf16
+
+            raw_logits = round_bf16(unembedding[:3] @ final_hidden)
+            expected_logits = 30.0 * np.tanh(raw_logits / 30.0)
+            np.testing.assert_allclose(logits, expected_logits, rtol=1e-5, atol=1e-5)
 
 
 if __name__ == "__main__":

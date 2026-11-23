@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from collections import OrderedDict
-from typing import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterable, Iterator
 
 from .archive import ALIGNMENT, HEADER_SIZE, HEADER_STRUCT, MAGIC, MAX_MANIFEST_BYTES, NXS_VERSION, NxsFormatError
 from .http_range import HTTPRangeReader
@@ -45,6 +47,12 @@ class RemoteNxsArchive:
         self.network_bytes = 0
         self.network_ranges = 0
         self._chunk_cache: OrderedDict[tuple[str, int], bytes] = OrderedDict()
+        self._cache_lock = threading.RLock()
+        self._session_local = threading.local()
+        self._session_lock = threading.Lock()
+        self._prefetch_sessions = []
+        self._prefetch_pool = None
+        self._prefetch_workers = 0
         self._reader = HTTPRangeReader(
             url,
             file_size,
@@ -201,30 +209,167 @@ class RemoteNxsArchive:
         except KeyError as exc:
             raise KeyError(f"NXS entry not found: {name}") from exc
 
-    def _get_chunk(self, name: str, index: int, chunk: dict) -> bytes:
-        key = (name, index)
-        cached = self._chunk_cache.get(key)
-        if cached is not None:
-            self._chunk_cache.move_to_end(key)
-            self.cache_hits += 1
-            return cached
-
-        self.cache_misses += 1
-        self._reader.seek(chunk["offset"])
-        data = self._reader.read(chunk["length"])
-        self.network_bytes += len(data)
-        self.network_ranges += 1
-        if len(data) != chunk["length"]:
-            raise NxsFormatError(f"truncated remote payload chunk in {name!r}")
-        if hashlib.sha256(data).hexdigest() != chunk["sha256"]:
-            raise NxsFormatError(f"remote payload chunk SHA-256 mismatch in {name!r}")
-        if len(data) <= self.cache_limit_bytes:
+    def _store_chunk(self, key: tuple[str, int], data: bytes) -> None:
+        if len(data) > self.cache_limit_bytes:
+            return
+        with self._cache_lock:
+            existing = self._chunk_cache.get(key)
+            if existing is not None:
+                self._chunk_cache.move_to_end(key)
+                return
             while self._chunk_cache and self.cache_bytes + len(data) > self.cache_limit_bytes:
                 _, oldest = self._chunk_cache.popitem(last=False)
                 self.cache_bytes -= len(oldest)
                 self.cache_evictions += 1
             self._chunk_cache[key] = data
             self.cache_bytes += len(data)
+
+    def _fetch_chunk_parallel(self, chunk: dict) -> bytes:
+        try:
+            import requests
+        except ImportError as exc:
+            raise RuntimeError("Parallel NXS reads require requests; install dotnxs[runtime]") from exc
+
+        start = chunk["offset"]
+        end = start + chunk["length"] - 1
+        headers = dict(self._reader.headers)
+        headers["Range"] = f"bytes={start}-{end}"
+        session = getattr(self._session_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._session_local.session = session
+            with self._session_lock:
+                self._prefetch_sessions.append(session)
+        response = session.get(
+            self.url,
+            headers=headers,
+            timeout=self._reader.timeout,
+            allow_redirects=True,
+        )
+        try:
+            if response.status_code != 206:
+                response.raise_for_status()
+                raise OSError(f"server did not honor parallel Range request (HTTP {response.status_code})")
+            match = re.match(r"^bytes (\d+)-(\d+)/(\d+|\*)$", response.headers.get("Content-Range", ""))
+            if not match or int(match.group(1)) != start or int(match.group(2)) != end:
+                raise OSError(f"unexpected Content-Range for NXS chunk: {response.headers.get('Content-Range')!r}")
+            if match.group(3) != "*" and int(match.group(3)) != self.file_size:
+                raise OSError("remote NXS archive size changed during parallel read")
+            data = response.content
+            if len(data) != chunk["length"]:
+                raise OSError(f"NXS chunk length mismatch: expected {chunk['length']}, received {len(data)}")
+            if hashlib.sha256(data).hexdigest() != chunk["sha256"]:
+                raise NxsFormatError("remote payload chunk SHA-256 mismatch")
+            return data
+        finally:
+            response.close()
+
+    def prefetch_entry_ranges(
+        self,
+        ranges: Iterable[tuple[str, int, int]],
+        *,
+        max_workers: int = 16,
+    ) -> dict[str, int]:
+        """Fetch all NXS chunks intersecting ranges concurrently into the LRU cache.
+
+        Ranges are ``(entry_name, logical_start, length)`` tuples. This reduces
+        per-request network latency for one layer's dense weights or a set of
+        router-selected experts without expanding the cache budget.
+        """
+        if not isinstance(max_workers, int) or isinstance(max_workers, bool) or max_workers <= 0:
+            raise ValueError("max_workers must be a positive integer")
+        requested: dict[tuple[str, int], dict] = {}
+        for name, start, length in ranges:
+            entry = self.get_entry(name)
+            total_size = entry["nbytes"]
+            if (
+                not isinstance(start, int)
+                or isinstance(start, bool)
+                or not isinstance(length, int)
+                or isinstance(length, bool)
+                or start < 0
+                or length < 0
+                or start > total_size
+                or length > total_size - start
+            ):
+                raise ValueError(f"requested prefetch range is invalid for {name!r}")
+            if length == 0:
+                continue
+            end = start + length
+            for index, chunk in enumerate(entry["chunks"]):
+                chunk_start = chunk["logical_offset"]
+                chunk_end = chunk_start + chunk["length"]
+                if max(start, chunk_start) >= min(end, chunk_end):
+                    continue
+                key = (name, index)
+                with self._cache_lock:
+                    cached = self._chunk_cache.get(key)
+                    if cached is not None:
+                        self._chunk_cache.move_to_end(key)
+                        self.cache_hits += 1
+                        continue
+                requested.setdefault(key, chunk)
+
+        if not requested:
+            return {"ranges": 0, "bytes": 0}
+
+        max_chunk_bytes = max(chunk["length"] for chunk in requested.values())
+        original_limit = self.cache_limit_bytes
+        with self._session_lock:
+            if self._prefetch_pool is None:
+                self._prefetch_workers = max_workers
+                self._prefetch_pool = ThreadPoolExecutor(max_workers=max_workers)
+            workers = min(max_workers, self._prefetch_workers)
+        workers = min(workers, len(requested), max(1, original_limit // max_chunk_bytes))
+        fetched_bytes = 0
+        items = list(requested.items())
+        for batch_start in range(0, len(items), workers):
+            batch = items[batch_start : batch_start + workers]
+            batch_bytes = sum(chunk["length"] for _key, chunk in batch)
+            # Reserve space for in-flight response buffers before starting the batch.
+            # Once fetched, the cache and Future share the same bytes objects.
+            keep_bytes = max(0, original_limit - batch_bytes)
+            with self._cache_lock:
+                while self._chunk_cache and self.cache_bytes > keep_bytes:
+                    _, oldest = self._chunk_cache.popitem(last=False)
+                    self.cache_bytes -= len(oldest)
+                    self.cache_evictions += 1
+            futures = {
+                self._prefetch_pool.submit(self._fetch_chunk_parallel, chunk): key
+                for key, chunk in batch
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                data = future.result()
+                fetched_bytes += len(data)
+                with self._cache_lock:
+                    self.cache_misses += 1
+                    self.network_bytes += len(data)
+                    self.network_ranges += 1
+                self._store_chunk(key, data)
+                del data
+        return {"ranges": len(requested), "bytes": fetched_bytes}
+
+    def _get_chunk(self, name: str, index: int, chunk: dict) -> bytes:
+        key = (name, index)
+        with self._cache_lock:
+            cached = self._chunk_cache.get(key)
+            if cached is not None:
+                self._chunk_cache.move_to_end(key)
+                self.cache_hits += 1
+                return cached
+            self.cache_misses += 1
+
+        self._reader.seek(chunk["offset"])
+        data = self._reader.read(chunk["length"])
+        if len(data) != chunk["length"]:
+            raise NxsFormatError(f"truncated remote payload chunk in {name!r}")
+        if hashlib.sha256(data).hexdigest() != chunk["sha256"]:
+            raise NxsFormatError(f"remote payload chunk SHA-256 mismatch in {name!r}")
+        with self._cache_lock:
+            self.network_bytes += len(data)
+            self.network_ranges += 1
+        self._store_chunk(key, data)
         return data
 
     def iter_entry_range(self, name: str, start: int = 0, length: int | None = None) -> Iterator[bytes]:
@@ -274,20 +419,30 @@ class RemoteNxsArchive:
 
     @property
     def cache_stats(self) -> dict[str, int]:
-        return {
-            "limit_bytes": self.cache_limit_bytes,
-            "used_bytes": self.cache_bytes,
-            "hits": self.cache_hits,
-            "misses": self.cache_misses,
-            "evictions": self.cache_evictions,
-            "network_bytes": self.network_bytes,
-            "network_ranges": self.network_ranges,
-        }
+        with self._cache_lock:
+            return {
+                "limit_bytes": self.cache_limit_bytes,
+                "used_bytes": self.cache_bytes,
+                "hits": self.cache_hits,
+                "misses": self.cache_misses,
+                "evictions": self.cache_evictions,
+                "network_bytes": self.network_bytes,
+                "network_ranges": self.network_ranges,
+            }
 
     def close(self) -> None:
+        if self._prefetch_pool is not None:
+            self._prefetch_pool.shutdown(wait=True, cancel_futures=True)
+            self._prefetch_pool = None
+        with self._session_lock:
+            sessions = list(self._prefetch_sessions)
+            self._prefetch_sessions.clear()
+        for session in sessions:
+            session.close()
         self._reader.close()
-        self._chunk_cache.clear()
-        self.cache_bytes = 0
+        with self._cache_lock:
+            self._chunk_cache.clear()
+            self.cache_bytes = 0
 
     def __enter__(self) -> "RemoteNxsArchive":
         return self

@@ -53,18 +53,18 @@ class InklingKernelTests(unittest.TestCase):
         result = bf16_to_float32(bytes([0x80, 0x3F, 0x00, 0xC0]))
         self.assertEqual(result.tolist(), [1.0, -2.0])
 
-    def test_interleaves_gate_up_and_runs_one_swiglu_expert(self):
+    def test_deinterleaves_gate_up_and_runs_one_swiglu_expert(self):
         import numpy as np
 
-        from dotnxs.inkling_kernels import interleave_gate_up_rows, run_expert_mlp
+        from dotnxs.inkling_kernels import deinterleave_gate_up_rows, run_expert_mlp
 
         source_gate_up = np.asarray(
-            [[1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [0.0, 2.0]], dtype=np.float32
+            [[1.0, 0.0], [0.0, 1.0], [2.0, 0.0], [0.0, 2.0]], dtype=np.float32
         )
-        gate_up = interleave_gate_up_rows(source_gate_up)
+        gate_up = deinterleave_gate_up_rows(source_gate_up)
         self.assertEqual(
             gate_up.tolist(),
-            [[1.0, 0.0], [0.0, 1.0], [2.0, 0.0], [0.0, 2.0]],
+            [[1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [0.0, 2.0]],
         )
 
         result = run_expert_mlp(np.asarray([1.0, 2.0]), gate_up, np.eye(2, dtype=np.float32))
