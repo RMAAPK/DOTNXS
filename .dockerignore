@@ -7,6 +7,7 @@ Google
 Microsoft
 GitHub CLI
 unsloth-tmp
+npm-cache
 build
 dist
 *.egg-info

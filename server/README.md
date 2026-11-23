@@ -4,8 +4,8 @@
 
 ## Manual Render setup
 
-1. Create a **Static Site** from `RMAAPK/DOTNXS`, root directory `website`, build command `npm ci --no-audit --no-fund && npm run build`, publish directory `dist`. Add custom domain `dotnxs.rmaa.pk` and configure the DNS record Render provides.
-2. Create a **Web Service** from the same repository, runtime **Docker**, Dockerfile path `server/Dockerfile`, Docker context repository root. The image starts the C++ gateway and its local Python inference worker.
+1. Create a **Static Site** from `RMAAPK/DOTNXS`, Root Directory `website`, build command `npm ci --no-audit --no-fund && npm run build`, and Publish Directory `dist` (Vite does not produce a `build/` folder). Add custom domain `dotnxs.rmaa.pk` and configure the DNS record Render provides.
+2. Create a **Web Service** from the same repository, runtime **Docker**, Dockerfile path `server/Dockerfile`, Docker context `.` (the repository root). Leave the Web Service Root Directory blank. **Do not** set either context or Root Directory to `server`: the Docker build needs the root `pyproject.toml` and `dotnxs/` package. The image starts the C++ gateway and its local Python inference worker.
 3. The website uses `https://dotnxs-inkling-api.onrender.com` from `website/public/config.js`; if Render assigns a different service URL, update it and redeploy the static site.
 4. Set the service environment variables if needed: `NXS_REPO_ID`, `NXS_FILENAME`, `DOTNXS_CACHE_BYTES`, `DOTNXS_MAX_CONTEXT_TOKENS`, `DOTNXS_MAX_NEW_TOKENS`, and `CORS_ORIGINS`. Defaults are set for the public NXS repo and `dotnxs.rmaa.pk`.
 
