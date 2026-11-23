@@ -16,7 +16,14 @@ RUN g++ -O2 -std=c++17 -pthread -I. cpp_server.cpp -o /dotnxs-gateway
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
-    DOTNXS_WORKER_PORT=8001
+    DOTNXS_WORKER_PORT=8001 \
+    DOTNXS_TORCH_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    TOKENIZERS_PARALLELISM=false \
+    MALLOC_ARENA_MAX=2
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libgomp1 libstdc++6 \

@@ -9,6 +9,7 @@ because layer parameters are swapped in and out during each forward pass.
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import threading
@@ -79,6 +80,13 @@ class StreamedInklingRunner:
             ) from exc
 
         self.torch = torch
+        thread_count = max(1, int(os.getenv("DOTNXS_TORCH_THREADS", "1")))
+        torch.set_num_threads(thread_count)
+        try:
+            torch.set_num_interop_threads(thread_count)
+        except RuntimeError:
+            # PyTorch only permits setting inter-op threads before its first parallel op.
+            pass
         text_config = dict(self.weights.config["text_config"])
         text_config.pop("model_type", None)
         config = Inkling2LoopTextConfig(**text_config)
