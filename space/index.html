@@ -27,14 +27,14 @@
           <h1>One archive.<br /><span>Fetch only what you ask for.</span></h1>
           <p class="hero-copy">
             DOTNXS keeps model tensors inside one <code>.nxs</code> file and indexes their byte ranges.
-            This demo reads the real Inkling 2 Mini archive over HTTP Range, checks its manifest and one tensor chunk,
-            then reports whether this browser can create a WebGPU device.
+            This CPU-side demo reads the real Inkling 2 Mini archive over HTTP Range and verifies its manifest and tensor bytes
+            while keeping a lazy in-memory cache capped at 200 MiB.
           </p>
           <div class="chips">
             <span>single <code>.nxs</code></span>
             <span>HTTP <code>Range</code></span>
             <span>SHA-256 verified</span>
-            <span>WebGPU capability check</span>
+            <span>200 MiB RAM cache cap</span>
           </div>
         </section>
 
@@ -48,22 +48,21 @@
               <span id="probe-status" class="status-pill idle"><span class="status-dot"></span>Not tested</span>
             </div>
 
-            <label class="field-label" for="archive-url">NXS archive URL</label>
-            <div class="url-row">
-              <input id="archive-url" type="url" spellcheck="false" value="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS/resolve/main/Inkling-2-Mini.nxs" />
-              <button id="probe-button" class="primary-button" type="button">Run range test <span aria-hidden="true">↗</span></button>
+            <div class="archive-target">
+              <div>
+                <span class="field-label">Fixed demo archive</span>
+                <strong>Inkling-2-Mini.nxs</strong>
+                <p class="hint">Public HF file · internal tensor ranges · no full-file download</p>
+              </div>
+              <a class="text-link" href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">View archive ↗</a>
             </div>
-            <p class="hint">The probe requests the fixed header, indexed manifest, and one real tensor range. It never downloads the full checkpoint.</p>
+            <button id="probe-button" class="primary-button probe-button" type="button">Run range test <span aria-hidden="true">↗</span></button>
+            <p class="hint">The probe fetches the header, manifest, and one tensor range. The fixed 200 MiB cache fills only as ranges are requested; it never allocates the whole budget upfront.</p>
 
             <div class="cache-control">
-              <div>
-                <label class="field-label" for="cache-budget">Browser RAM cache ceiling</label>
-                <p class="hint">A lazy cap—not a pre-allocation. Only fetched NXS ranges occupy this cache.</p>
-              </div>
-              <div class="cache-slider-wrap">
-                <input id="cache-budget" type="range" min="64" max="512" step="8" value="200" />
-                <span><strong id="cache-budget-value">200</strong> MB</span>
-              </div>
+              <span class="cache-icon">▦</span>
+              <div><strong>CPU range cache</strong><span>200 MiB maximum · lazy fill · LRU eviction</span></div>
+              <span class="cache-cap">200 MiB</span>
             </div>
 
             <div id="probe-error" class="error-box" hidden></div>
@@ -89,13 +88,6 @@
           </article>
 
           <aside class="side-column">
-            <article class="panel gpu-panel">
-              <div class="eyebrow muted">OPTIONAL ACCELERATOR</div>
-              <h2>WebGPU check</h2>
-              <div id="gpu-status" class="gpu-state"><span class="spinner"></span>Checking browser support…</div>
-              <p id="gpu-details" class="hint">This is a capability check only; no model weights are allocated.</p>
-            </article>
-
             <article class="panel model-panel">
               <div class="eyebrow muted">TARGET MODEL</div>
               <h2>Inkling 2 Mini</h2>
@@ -111,8 +103,8 @@
           <div class="runtime-icon">⌁</div>
           <div>
             <div class="eyebrow muted">NEXT MILESTONE</div>
-            <h2>Inference runtime is not connected yet</h2>
-            <p class="hint">This demo proves that the real archive can be range-read and verified. It intentionally does not generate placeholder chat replies. The WebGPU runtime, expert routing, cache policy, and model-specific kernels come next.</p>
+            <h2>CPU-first chat runtime is not connected yet</h2>
+            <p class="hint">This demo proves the real archive can be range-read and verified with a fixed 200 MiB lazy cache. It intentionally does not generate placeholder chat replies; expert routing, layer execution, and KV-cache handling are still to be implemented.</p>
           </div>
           <span class="coming-pill">RUNTIME · IN PROGRESS</span>
         </section>

@@ -9,7 +9,6 @@ const DEFAULT_ARCHIVE_URL =
 
 const $ = (id) => document.getElementById(id);
 const elements = {
-  url: $("archive-url"),
   button: $("probe-button"),
   status: $("probe-status"),
   error: $("probe-error"),
@@ -18,8 +17,6 @@ const elements = {
   entryCount: $("entry-count"),
   requestCount: $("request-count"),
   bytesFetched: $("bytes-fetched"),
-  cacheBudget: $("cache-budget"),
-  cacheBudgetValue: $("cache-budget-value"),
   cacheUsage: $("cache-usage"),
   cacheHits: $("cache-hits"),
   verifiedMessage: $("verified-message"),
@@ -27,8 +24,6 @@ const elements = {
   sampleSize: $("sample-size"),
   log: $("request-log"),
   elapsed: $("elapsed"),
-  gpuStatus: $("gpu-status"),
-  gpuDetails: $("gpu-details"),
 };
 
 let bytesFetched = 0;
@@ -88,8 +83,8 @@ class ByteRangeCache {
   }
 }
 
-let rangeCache = new ByteRangeCache(Number(elements.cacheBudget.value) * 1024 * 1024);
-elements.cacheBudgetValue.textContent = elements.cacheBudget.value;
+const CACHE_BUDGET_BYTES = 200 * 1024 * 1024;
+let rangeCache = new ByteRangeCache(CACHE_BUDGET_BYTES);
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "unknown";
@@ -240,8 +235,7 @@ function readTensorEntry(manifest) {
 }
 
 async function runProbe() {
-  const url = elements.url.value.trim();
-  if (!url) throw new Error("Enter a public NXS archive URL.");
+  const url = DEFAULT_ARCHIVE_URL;
   bytesFetched = 0;
   rangeRequests = 0;
   cacheHits = 0;
@@ -311,35 +305,5 @@ async function runProbe() {
   }
 }
 
-async function checkWebGPU() {
-  if (!navigator.gpu) {
-    elements.gpuStatus.className = "gpu-state no";
-    elements.gpuStatus.textContent = "WebGPU unavailable in this browser";
-    elements.gpuDetails.textContent = "Range streaming can still be tested, but this device cannot run the planned WebGPU backend here.";
-    return;
-  }
-  try {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!adapter) throw new Error("No WebGPU adapter returned.");
-    const device = await adapter.requestDevice();
-    const maxBuffer = device.limits.maxBufferSize;
-    device.destroy();
-    elements.gpuStatus.className = "gpu-state ok";
-    elements.gpuStatus.textContent = "WebGPU device available";
-    elements.gpuDetails.textContent = `Capability check only · max single buffer ${formatBytes(maxBuffer)} · no model weights allocated.`;
-  } catch (error) {
-    elements.gpuStatus.className = "gpu-state no";
-    elements.gpuStatus.textContent = "WebGPU adapter unavailable";
-    elements.gpuDetails.textContent = error instanceof Error ? error.message : String(error);
-  }
-}
-
-elements.cacheBudget.addEventListener("input", () => {
-  const budgetMiB = Number(elements.cacheBudget.value);
-  elements.cacheBudgetValue.textContent = String(budgetMiB);
-  rangeCache.setLimit(budgetMiB * 1024 * 1024);
-  updateCacheMetrics();
-});
 elements.button.addEventListener("click", runProbe);
 updateCacheMetrics();
-checkWebGPU();
