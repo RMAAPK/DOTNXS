@@ -1,5 +1,10 @@
 # Secrets and local auth config
 AppData/
+.cache/
+.kaggle/
+Google/
+Microsoft/
+unsloth-tmp/
 pypi-tok.txt
 GitHub CLI/
 .gitconfig

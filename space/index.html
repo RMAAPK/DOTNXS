@@ -55,13 +55,26 @@
             </div>
             <p class="hint">The probe requests the fixed header, indexed manifest, and one real tensor range. It never downloads the full checkpoint.</p>
 
+            <div class="cache-control">
+              <div>
+                <label class="field-label" for="cache-budget">Browser RAM cache ceiling</label>
+                <p class="hint">A lazy cap—not a pre-allocation. Only fetched NXS ranges occupy this cache.</p>
+              </div>
+              <div class="cache-slider-wrap">
+                <input id="cache-budget" type="range" min="64" max="512" step="8" value="200" />
+                <span><strong id="cache-budget-value">200</strong> MB</span>
+              </div>
+            </div>
+
             <div id="probe-error" class="error-box" hidden></div>
             <div id="probe-results" class="results" hidden>
               <div class="metric-grid">
                 <div class="metric"><span>Archive size</span><strong id="archive-size">—</strong></div>
                 <div class="metric"><span>Manifest entries</span><strong id="entry-count">—</strong></div>
                 <div class="metric"><span>HTTP requests</span><strong id="request-count">—</strong></div>
-                <div class="metric"><span>Bytes fetched</span><strong id="bytes-fetched">—</strong></div>
+                <div class="metric"><span>Network bytes</span><strong id="bytes-fetched">—</strong></div>
+                <div class="metric"><span>Cache used / cap</span><strong id="cache-usage">—</strong></div>
+                <div class="metric"><span>Cache hits / evictions</span><strong id="cache-hits">—</strong></div>
               </div>
               <div class="verified-row"><span class="checkmark">✓</span><span id="verified-message">Manifest and tensor chunk verified</span></div>
               <div class="sample-row"><span class="sample-label">Sample tensor</span><code id="sample-name">—</code><span id="sample-size">—</span></div>
@@ -77,7 +90,7 @@
 
           <aside class="side-column">
             <article class="panel gpu-panel">
-              <div class="eyebrow muted">THIS DEVICE</div>
+              <div class="eyebrow muted">OPTIONAL ACCELERATOR</div>
               <h2>WebGPU check</h2>
               <div id="gpu-status" class="gpu-state"><span class="spinner"></span>Checking browser support…</div>
               <p id="gpu-details" class="hint">This is a capability check only; no model weights are allocated.</p>

@@ -90,10 +90,21 @@ input[type=url]:focus { border-color: rgba(100,229,218,.7); box-shadow: 0 0 0 3p
 .primary-button:hover { filter: brightness(1.08); }
 .primary-button:disabled { cursor: wait; opacity: .62; }
 .hint { color: var(--muted); font-size: 11px; line-height: 1.65; }
-.stream-panel > .hint { margin: 9px 0 20px; }
+.stream-panel > .hint { margin: 9px 0 18px; }
+.cache-control {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin: 0 0 18px; padding: 13px 14px; border: 1px solid var(--line);
+  border-radius: 12px; background: rgba(255,255,255,.02);
+}
+.cache-control .field-label { margin: 0; }
+.cache-control .hint { margin: 5px 0 0; }
+.cache-slider-wrap { display: grid; grid-template-columns: 145px auto; align-items: center; gap: 10px; min-width: 230px; }
+.cache-slider-wrap input { width: 100%; accent-color: var(--cyan); }
+.cache-slider-wrap span { color: #d8def0; font: 11px "DM Mono", monospace; white-space: nowrap; }
+.cache-slider-wrap strong { color: var(--cyan); }
 .error-box { margin: 18px 0; padding: 12px; border: 1px solid rgba(255,114,140,.3); border-radius: 10px; color: #ffc0cd; background: rgba(255,114,140,.07); font: 11px/1.6 "DM Mono", monospace; overflow-wrap: anywhere; }
 .results { margin: 20px 0; }
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
 .metric { padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.025); }
 .metric span { display: block; color: var(--muted); font-size: 10px; }
 .metric strong { display: block; margin-top: 8px; font: 13px "DM Mono", monospace; overflow-wrap: anywhere; }
@@ -138,6 +149,8 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 24px
   .stream-panel { padding: 17px; }
   .url-row { flex-direction: column; }
   .primary-button { min-height: 42px; }
+  .cache-control { align-items: flex-start; flex-direction: column; }
+  .cache-slider-wrap { width: 100%; min-width: 0; grid-template-columns: 1fr auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .runtime-panel { align-items: flex-start; flex-wrap: wrap; }
   .coming-pill { margin-left: 54px; }
