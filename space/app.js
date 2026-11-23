@@ -18,6 +18,9 @@ const elements = {
   requestCount: $("request-count"),
   bytesFetched: $("bytes-fetched"),
   cacheUsage: $("cache-usage"),
+  cacheUsageDebug: $("cache-usage-debug"),
+  cacheLive: $("cache-live"),
+  cacheMeterFill: $("cache-meter-fill"),
   cacheHits: $("cache-hits"),
   verifiedMessage: $("verified-message"),
   sampleName: $("sample-name"),
@@ -124,9 +127,15 @@ function getReadAheadBytes() {
 }
 
 function updateCacheMetrics() {
-  if (!elements.cacheUsage) return;
-  elements.cacheUsage.textContent = `${formatBytes(rangeCache.usedBytes)} / ${formatBytes(rangeCache.limitBytes)}`;
-  elements.cacheHits.textContent = `${cacheHits} / ${rangeCache.evictions}`;
+  const usageText = `${formatBytes(rangeCache.usedBytes)} / ${formatBytes(rangeCache.limitBytes)}`;
+  if (elements.cacheUsage) elements.cacheUsage.textContent = usageText;
+  if (elements.cacheUsageDebug) elements.cacheUsageDebug.textContent = usageText;
+  if (elements.cacheLive) elements.cacheLive.textContent = `${formatBytes(rangeCache.usedBytes)} cached`;
+  if (elements.cacheMeterFill) {
+    const percent = Math.min(100, (rangeCache.usedBytes / rangeCache.limitBytes) * 100);
+    elements.cacheMeterFill.style.width = `${percent.toFixed(2)}%`;
+  }
+  if (elements.cacheHits) elements.cacheHits.textContent = `${cacheHits} / ${rangeCache.evictions}`;
 }
 
 async function fetchRange(url, start, length, totalSize = null) {

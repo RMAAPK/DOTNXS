@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1020" />
-    <title>DOTNXS · Stream Lab</title>
+    <title>DOTNXS · Inkling Chat</title>
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="app.js"></script>
   </head>
@@ -13,7 +13,7 @@
       <header class="topbar">
         <a class="brand" href="https://github.com/RMAAPK/DOTNXS" target="_blank" rel="noreferrer">
           <span class="brand-mark">N</span>
-          <span>DOTNXS<span class="brand-sub">STREAM LAB</span></span>
+          <span>DOTNXS<span class="brand-sub">INKLING CHAT</span></span>
         </a>
         <nav>
           <a href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">Model archive</a>
@@ -23,67 +23,42 @@
 
       <main>
         <section class="hero">
-          <div class="eyebrow"><span class="pulse"></span> SINGLE-FILE MODEL ARCHIVE · BROWSER RANGE TEST</div>
-          <h1>One archive.<br /><span>Fetch only what you ask for.</span></h1>
+          <div class="eyebrow"><span class="pulse"></span> CPU-FIRST · BOUNDED MEMORY</div>
+          <h1>Chat with Inkling.<br /><span>Page weights as needed.</span></h1>
           <p class="hero-copy">
-            DOTNXS keeps model tensors inside one <code>.nxs</code> file and indexes their byte ranges.
-            This CPU-side demo reads the real Inkling 2 Mini archive over HTTP Range and verifies its manifest and tensor bytes
-            while keeping a lazy in-memory cache capped at 200 MiB.
+            DOTNXS keeps the model in one archive and uses a fixed 200 MiB lazy cache for fetched weight ranges.
+            The cache is a ceiling, not a pre-allocation; ranges load on demand and old chunks can be evicted.
           </p>
           <div class="chips">
             <span>single <code>.nxs</code></span>
-            <span>HTTP <code>Range</code></span>
-            <span>SHA-256 verified</span>
-            <span>200 MiB RAM cache cap</span>
+            <span>CPU-side range cache</span>
+            <span>200 MiB maximum</span>
+            <span>Apache-2.0 model</span>
           </div>
         </section>
 
-        <section class="layout">
-          <article class="panel stream-panel">
+        <section class="chat-layout">
+          <article class="panel chat-panel">
             <div class="panel-head">
               <div>
-                <div class="eyebrow muted">LIVE ARCHIVE PROBE</div>
-                <h2>Test remote streaming</h2>
+                <div class="eyebrow muted">MODEL SESSION</div>
+                <h2>Inkling 2 Mini</h2>
               </div>
-              <span id="probe-status" class="status-pill idle"><span class="status-dot"></span>Not tested</span>
+              <span id="chat-status" class="status-pill idle"><span class="status-dot"></span>Runtime not connected</span>
             </div>
-
-            <div class="archive-target">
-              <div>
-                <span class="field-label">Fixed demo archive</span>
-                <strong>Inkling-2-Mini.nxs</strong>
-                <p class="hint">Public HF file · internal tensor ranges · no full-file download</p>
+            <div id="chat-messages" class="chat-messages" aria-live="polite">
+              <div class="message system-message">
+                <span class="message-label">DOTNXS</span>
+                <p>The NXS archive and 200 MiB range cache are ready. Real model generation is not connected yet, so this demo will not invent replies.</p>
               </div>
-              <a class="text-link" href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">View archive ↗</a>
             </div>
-            <button id="probe-button" class="primary-button probe-button" type="button">Run range test <span aria-hidden="true">↗</span></button>
-            <p class="hint">The probe fetches the header, manifest, and one tensor range. The fixed 200 MiB cache fills only as ranges are requested; it never allocates the whole budget upfront.</p>
-
-            <div class="cache-control">
-              <span class="cache-icon">▦</span>
-              <div><strong>CPU range cache</strong><span>200 MiB maximum · lazy fill · LRU eviction</span></div>
-              <span class="cache-cap">200 MiB</span>
-            </div>
-
-            <div id="probe-error" class="error-box" hidden></div>
-            <div id="probe-results" class="results" hidden>
-              <div class="metric-grid">
-                <div class="metric"><span>Archive size</span><strong id="archive-size">—</strong></div>
-                <div class="metric"><span>Manifest entries</span><strong id="entry-count">—</strong></div>
-                <div class="metric"><span>HTTP requests</span><strong id="request-count">—</strong></div>
-                <div class="metric"><span>Network bytes</span><strong id="bytes-fetched">—</strong></div>
-                <div class="metric"><span>Cache used / cap</span><strong id="cache-usage">—</strong></div>
-                <div class="metric"><span>Cache hits / evictions</span><strong id="cache-hits">—</strong></div>
-              </div>
-              <div class="verified-row"><span class="checkmark">✓</span><span id="verified-message">Manifest and tensor chunk verified</span></div>
-              <div class="sample-row"><span class="sample-label">Sample tensor</span><code id="sample-name">—</code><span id="sample-size">—</span></div>
-            </div>
-
-            <div class="log-wrap">
-              <div class="log-title"><span>REQUEST LOG</span><span id="elapsed">0.0 s</span></div>
-              <ol id="request-log" class="request-log">
-                <li class="log-placeholder">Ready to probe the published archive.</li>
-              </ol>
+            <form id="chat-form" class="chat-composer">
+              <textarea id="chat-input" rows="2" disabled placeholder="Chat will be enabled when the CPU inference runtime is ready."></textarea>
+              <button id="send-button" class="primary-button" type="submit" disabled>Send</button>
+            </form>
+            <div class="chat-foot">
+              <span>200 MiB lazy cache · no whole-checkpoint download</span>
+              <span id="cache-live">0 B cached</span>
             </div>
           </article>
 
@@ -93,26 +68,58 @@
               <h2>Inkling 2 Mini</h2>
               <div class="model-stat"><strong>26.4B</strong><span>total parameters</span></div>
               <div class="model-stat"><strong>3.4B</strong><span>active parameters</span></div>
-              <p class="hint">The source checkpoint is mixed NVFP4/MXFP8. NXS preserves those bytes; this page does not dequantize or run inference.</p>
-              <a class="text-link" href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">Open the HF archive <span aria-hidden="true">↗</span></a>
+              <p class="hint">NXS preserves the source checkpoint bytes (NVFP4/MXFP8) and loads internal ranges on demand.</p>
+              <a class="text-link" href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">Open the HF archive ↗</a>
+            </article>
+            <article class="panel cache-panel">
+              <div class="eyebrow muted">MEMORY POLICY</div>
+              <h2>Fixed 200 MiB cap</h2>
+              <p class="hint">The cache fills only with requested ranges. It does not reserve 200 MiB up front; least-recently-used chunks are evicted when space is needed.</p>
+              <div class="cache-meter"><span id="cache-meter-fill" class="cache-meter-fill"></span></div>
+              <div class="cache-meter-label"><span>Cache in use</span><strong id="cache-usage">0 B / 200 MiB</strong></div>
             </article>
           </aside>
         </section>
 
-        <section class="panel runtime-panel">
-          <div class="runtime-icon">⌁</div>
-          <div>
-            <div class="eyebrow muted">NEXT MILESTONE</div>
-            <h2>CPU-first chat runtime is not connected yet</h2>
-            <p class="hint">This demo proves the real archive can be range-read and verified with a fixed 200 MiB lazy cache. It intentionally does not generate placeholder chat replies; expert routing, layer execution, and KV-cache handling are still to be implemented.</p>
-          </div>
-          <span class="coming-pill">RUNTIME · IN PROGRESS</span>
-        </section>
+        <details class="diagnostics">
+          <summary>Developer diagnostics · NXS range test</summary>
+          <article class="panel stream-panel">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow muted">INTERNAL CHECK</div>
+                <h2>Verify remote archive ranges</h2>
+              </div>
+              <span id="probe-status" class="status-pill idle"><span class="status-dot"></span>Not tested</span>
+            </div>
+            <div class="archive-target">
+              <div><span class="field-label">Fixed archive</span><strong>Inkling-2-Mini.nxs</strong></div>
+              <a class="text-link" href="https://huggingface.co/rmaaorg/Inkling-2-Mini-NXS" target="_blank" rel="noreferrer">View archive ↗</a>
+            </div>
+            <button id="probe-button" class="primary-button probe-button" type="button">Run range test</button>
+            <div id="probe-error" class="error-box" hidden></div>
+            <div id="probe-results" class="results" hidden>
+              <div class="metric-grid">
+                <div class="metric"><span>Archive size</span><strong id="archive-size">—</strong></div>
+                <div class="metric"><span>Manifest entries</span><strong id="entry-count">—</strong></div>
+                <div class="metric"><span>HTTP requests</span><strong id="request-count">—</strong></div>
+                <div class="metric"><span>Network bytes</span><strong id="bytes-fetched">—</strong></div>
+                <div class="metric"><span>Cache used / cap</span><strong id="cache-usage-debug">—</strong></div>
+                <div class="metric"><span>Cache hits / evictions</span><strong id="cache-hits">—</strong></div>
+              </div>
+              <div class="verified-row"><span class="checkmark">✓</span><span id="verified-message">Manifest and tensor chunk verified</span></div>
+              <div class="sample-row"><span class="sample-label">Sample tensor</span><code id="sample-name">—</code><span id="sample-size">—</span></div>
+            </div>
+            <div class="log-wrap">
+              <div class="log-title"><span>REQUEST LOG</span><span id="elapsed">0.0 s</span></div>
+              <ol id="request-log" class="request-log"><li class="log-placeholder">No diagnostic request run yet.</li></ol>
+            </div>
+          </article>
+        </details>
       </main>
 
       <footer>
-        <span>DOTNXS v0.2 archive probe</span>
-        <span>Inkling 2 Mini weights remain under their upstream Apache-2.0 license.</span>
+        <span>DOTNXS v0.2 archive · CPU range cache</span>
+        <span>Inkling 2 Mini source weights remain under Apache-2.0.</span>
       </footer>
     </div>
   </body>
