@@ -115,7 +115,11 @@ struct StreamBuffer {
                 return false;
             }
         }
-        if (cancelled || chunks.empty()) return false;
+        if (cancelled) return false;
+        if (chunks.empty()) {
+            if (finished) sink.done();
+            return finished;
+        }
         std::string chunk = std::move(chunks.front());
         chunks.pop_front();
         changed.notify_all();
