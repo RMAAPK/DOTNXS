@@ -16,6 +16,13 @@ jobs:
         run: |
           python tests/fake_sse_worker.py 18081 > "$RUNNER_TEMP/fake-worker.log" 2>&1 &
           worker_pid=$!
+          for attempt in {1..20}; do
+            if curl --silent --show-error --max-time 2 http://127.0.0.1:18081/health 2>/dev/null | grep -q '"status":"ready"'; then
+              break
+            fi
+            sleep 1
+          done
+          curl --silent --show-error http://127.0.0.1:18081/health | grep -q '"status":"ready"'
           PORT=18080 DOTNXS_WORKER_PORT=18081 "$RUNNER_TEMP/dotnxs-gateway" > "$RUNNER_TEMP/dotnxs-gateway.log" 2>&1 &
           gateway_pid=$!
           trap 'kill "$gateway_pid" "$worker_pid" 2>/dev/null || true' EXIT
@@ -26,7 +33,10 @@ jobs:
             sleep 1
           done
           test "$(curl --silent --show-error http://127.0.0.1:18080/ping)" = "pong"
-          curl --silent --show-error http://127.0.0.1:18080/health | grep -q '"status":"ready"'
+          health="$(curl --silent --show-error http://127.0.0.1:18080/health)"
+          echo "C++ gateway health: $health"
+          grep -q '"status":"ready"' <<< "$health"
           reply="$(curl --silent --show-error --no-buffer --max-time 30 -H 'Content-Type: application/json' --data '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:18080/v1/chat)"
+          echo "C++ gateway streamed reply: $reply"
           grep -q 'event: token' <<< "$reply"
           grep -q 'gateway smoke reply' <<< "$reply"
