@@ -10,7 +10,7 @@ This directory contains the Render-facing FastAPI service. The frontend lives in
 4. The static site requests `dotnxs.rmaa.pk`. Add/verify the DNS record Render shows for that domain.
 5. The website's `website/config.js` points to `https://dotnxs-inkling-api.onrender.com`. If Render assigns a different service hostname, update that file and redeploy.
 
-Render installs the DOTNXS `runtime` extra and starts `uvicorn server.app:app` on `$PORT`. The service exposes `GET /health` and `POST /v1/chat` (server-sent events). It reads the public NXS archive directly from Hugging Face; it does not clone or download the full model checkpoint. The server's verified NXS chunk LRU cache is fixed at 200 MiB.
+Render installs the DOTNXS `runtime` extra and starts `uvicorn server.app:app` on `$PORT`. `server/requirements.txt` pins the CPU-only PyTorch wheel. The service exposes `GET /health` and `POST /v1/chat` (server-sent events). It reads the public NXS archive directly from Hugging Face; it does not clone or download the full model checkpoint. The server's verified NXS chunk LRU cache is fixed at 200 MiB.
 
 ## Limits and latency
 
