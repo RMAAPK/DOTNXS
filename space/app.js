@@ -18,6 +18,10 @@ const elements = {
   entryCount: $("entry-count"),
   requestCount: $("request-count"),
   bytesFetched: $("bytes-fetched"),
+  cacheBudget: $("cache-budget"),
+  cacheBudgetValue: $("cache-budget-value"),
+  cacheUsage: $("cache-usage"),
+  cacheHits: $("cache-hits"),
   verifiedMessage: $("verified-message"),
   sampleName: $("sample-name"),
   sampleSize: $("sample-size"),
@@ -29,7 +33,63 @@ const elements = {
 
 let bytesFetched = 0;
 let rangeRequests = 0;
+let cacheHits = 0;
 let startedAt = 0;
+
+class ByteRangeCache {
+  constructor(limitBytes) {
+    this.limitBytes = limitBytes;
+    this.usedBytes = 0;
+    this.evictions = 0;
+    this.items = new Map();
+  }
+
+  setLimit(limitBytes) {
+    this.limitBytes = limitBytes;
+    this.evictUntilFits(0);
+  }
+
+  get(key) {
+    const item = this.items.get(key);
+    if (!item) return null;
+    this.items.delete(key);
+    this.items.set(key, item);
+    return item;
+  }
+
+  set(key, item) {
+    const size = item.bytes.byteLength;
+    if (size > this.limitBytes) return false;
+    const old = this.items.get(key);
+    if (old) {
+      this.usedBytes -= old.bytes.byteLength;
+      this.items.delete(key);
+    }
+    this.evictUntilFits(size);
+    this.items.set(key, item);
+    this.usedBytes += size;
+    return true;
+  }
+
+  evictUntilFits(incomingBytes) {
+    while (this.items.size && this.usedBytes + incomingBytes > this.limitBytes) {
+      const oldestKey = this.items.keys().next().value;
+      const oldest = this.items.get(oldestKey);
+      this.items.delete(oldestKey);
+      this.usedBytes -= oldest.bytes.byteLength;
+      this.evictions += 1;
+    }
+  }
+
+  clear() {
+    this.items.clear();
+    this.usedBytes = 0;
+    this.evictions = 0;
+  }
+}
+
+let rangeCache = new ByteRangeCache(Number(elements.cacheBudget.value) * 1024 * 1024);
+elements.cacheBudgetValue.textContent = elements.cacheBudget.value;
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "unknown";
@@ -64,8 +124,14 @@ function setStatus(label, state) {
 }
 
 function getReadAheadBytes() {
-  // A small probe is deliberate: it should demonstrate selective I/O, not warm the whole model.
+  // The demo probes small ranges; the selected cache ceiling is not pre-allocated.
   return 256 * 1024;
+}
+
+function updateCacheMetrics() {
+  if (!elements.cacheUsage) return;
+  elements.cacheUsage.textContent = `${formatBytes(rangeCache.usedBytes)} / ${formatBytes(rangeCache.limitBytes)}`;
+  elements.cacheHits.textContent = `${cacheHits} / ${rangeCache.evictions}`;
 }
 
 async function fetchRange(url, start, length, totalSize = null) {
@@ -75,6 +141,14 @@ async function fetchRange(url, start, length, totalSize = null) {
   const requestedLength = Math.max(length, getReadAheadBytes());
   const endExclusive = totalSize === null ? start + requestedLength : Math.min(totalSize, start + requestedLength);
   const end = endExclusive - 1;
+  const cacheKey = `${url}|${start}-${end}`;
+  const cached = rangeCache.get(cacheKey);
+  if (cached) {
+    cacheHits += 1;
+    updateCacheMetrics();
+    addLog(`RAM cache hit · ${formatBytes(cached.bytes.byteLength)} at ${start}`, "ok");
+    return cached;
+  }
   const response = await fetch(url, {
     method: "GET",
     mode: "cors",
@@ -120,7 +194,10 @@ async function fetchRange(url, start, length, totalSize = null) {
   }
   bytesFetched += bytes.byteLength;
   rangeRequests += 1;
-  return { bytes, total, start };
+  const result = { bytes, total, start };
+  rangeCache.set(cacheKey, result);
+  updateCacheMetrics();
+  return result;
 }
 
 async function sha256(bytes) {
@@ -167,7 +244,9 @@ async function runProbe() {
   if (!url) throw new Error("Enter a public NXS archive URL.");
   bytesFetched = 0;
   rangeRequests = 0;
+  cacheHits = 0;
   startedAt = performance.now();
+  updateCacheMetrics();
   elements.results.hidden = true;
   elements.error.hidden = true;
   elements.error.textContent = "";
@@ -213,6 +292,7 @@ async function runProbe() {
     elements.entryCount.textContent = manifest.entries.length.toLocaleString();
     elements.requestCount.textContent = String(rangeRequests);
     elements.bytesFetched.textContent = formatBytes(bytesFetched);
+    updateCacheMetrics();
     elements.sampleName.textContent = entry.name;
     elements.sampleSize.textContent = formatBytes(chunk.length);
     elements.verifiedMessage.textContent = "Header, manifest, and real tensor bytes verified";
@@ -254,5 +334,12 @@ async function checkWebGPU() {
   }
 }
 
+elements.cacheBudget.addEventListener("input", () => {
+  const budgetMiB = Number(elements.cacheBudget.value);
+  elements.cacheBudgetValue.textContent = String(budgetMiB);
+  rangeCache.setLimit(budgetMiB * 1024 * 1024);
+  updateCacheMetrics();
+});
 elements.button.addEventListener("click", runProbe);
+updateCacheMetrics();
 checkWebGPU();
