@@ -4,12 +4,12 @@
 
 ## Manual Render setup
 
-1. Create a **Static Site** from `RMAAPK/DOTNXS`, Root Directory `website`, build command `npm ci --no-audit --no-fund && npm run build`, and Publish Directory `dist` (Vite does not produce a `build/` folder). Add custom domain `dotnxs.rmaa.pk` and configure the DNS record Render provides.
-2. Create a **Web Service** from the same repository, runtime **Docker**, Dockerfile path `server/Dockerfile`, Docker context `.` (the repository root). Leave the Web Service Root Directory blank. **Do not** set either context or Root Directory to `server`: the Docker build needs the root `pyproject.toml` and `dotnxs/` package. The image starts the C++ gateway and its local Python inference worker.
-3. The website uses `https://dotnxs-inkling-api.onrender.com` from `website/public/config.js`; if Render assigns a different service URL, update it and redeploy the static site.
+1. Create a **Static Site** from `RMAAPK/DOTNXS`, Root Directory `website`, build command `npm install && npm run build`, and Publish Directory `build`. The Vite output is configured to match the existing Render service setting. Add custom domain `dotnxs.rmaa.pk` and configure the DNS record Render provides.
+2. Create a **Web Service** from the same repository, runtime **Docker**, Root Directory `server`, Dockerfile path `./Dockerfile`, and Docker Context `.` (the `server/` directory). The Dockerfile fetches/builds the `dotnxs` wheel from GitHub, so it works with this monorepo root setting. The image starts the C++ gateway and its local Python inference worker.
+3. The current Render API URL is `https://dotnxs-server.onrender.com` (service `DOTNXS-Server`); it is set in `website/public/config.js`. If Render assigns a different service URL, update that file and redeploy the static site.
 4. Set the service environment variables if needed: `NXS_REPO_ID`, `NXS_FILENAME`, `DOTNXS_CACHE_BYTES`, `DOTNXS_MAX_CONTEXT_TOKENS`, `DOTNXS_MAX_NEW_TOKENS`, and `CORS_ORIGINS`. Defaults are set for the public NXS repo and `dotnxs.rmaa.pk`.
 
-The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-inkling-api.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge.
+The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-server.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge.
 
 ## Free-plan limits
 

@@ -40,5 +40,5 @@ jobs:
           echo "C++ gateway streamed reply: $reply"
           grep -q 'event: token' <<< "$reply"
           grep -q 'gateway smoke reply' <<< "$reply"
-      - name: Build Render Docker image
-        run: docker build --file server/Dockerfile --tag dotnxs-render-api:ci .
+      - name: Build Render Docker image with the configured server context
+        run: docker build --file server/Dockerfile --tag dotnxs-render-api:ci server

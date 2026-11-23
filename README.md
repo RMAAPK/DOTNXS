@@ -49,7 +49,7 @@ Install the CPU runtime dependencies with `python -m pip install '.[runtime]'`. 
 - `website/`: React Native Web frontend built with Vite for `dotnxs.rmaa.pk`.
 - `server/`: C++ HTTP gateway and Dockerfile, plus a private Python worker that runs the official Transformers model math.
 
-Create a Render Static Site from the `website/` directory and a Docker Web Service from `server/Dockerfile` (Docker context: repository root). The C++ gateway answers `/ping` with `pong` and proxies chat requests to the local model worker. The Render API hostname is set in `website/public/config.js`.
+Create a Render Static Site with Root Directory `website` and Publish Directory `build`, plus a Docker Web Service with Root Directory `server`, Dockerfile `./Dockerfile`, and Docker Context `.`. The C++ gateway answers `/ping` with `pong` and streams chat responses from the local model worker. The Render API hostname is set in `website/public/config.js`.
 
 Render's Free web plan has 512 MB RAM; that may be insufficient for the Torch worker and its temporary weights even with a 200 MiB NXS chunk-cache cap. The Free service also sleeps after 15 minutes without inbound requests. `website/public/ping.html` offers a ten-minute heartbeat while open, and `.github/workflows/render-ping.yml` can ping `/ping` on a schedule. Scheduled pings consume the workspace's Free instance hours; they do not bypass Render's monthly limits.
 

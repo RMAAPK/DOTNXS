@@ -173,7 +173,7 @@ int main() {
     const int port = env_port("PORT", 10000);
     const int worker_port = env_port("DOTNXS_WORKER_PORT", 8001);
     const std::string default_origins =
-        "https://dotnxs.rmaa.pk,https://dotnxs-website.onrender.com,"
+        "https://dotnxs.rmaa.pk,https://dotnxs.onrender.com,"
         "https://rmaaorg-dotnxs-demo.static.hf.space,https://rmaaorg-dotnxs-demo.hf.space,"
         "http://localhost:8000,http://127.0.0.1:8000";
     const char *cors_value = std::getenv("CORS_ORIGINS");

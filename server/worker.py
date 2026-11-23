@@ -30,7 +30,7 @@ CORS_ORIGINS = [
     origin.strip().rstrip("/")
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "https://dotnxs.rmaa.pk,https://dotnxs-website.onrender.com,https://rmaaorg-dotnxs-demo.static.hf.space,https://rmaaorg-dotnxs-demo.hf.space,http://localhost:8000,http://127.0.0.1:8000",
+        "https://dotnxs.rmaa.pk,https://dotnxs.onrender.com,https://rmaaorg-dotnxs-demo.static.hf.space,https://rmaaorg-dotnxs-demo.hf.space,http://localhost:8000,http://127.0.0.1:8000",
     ).split(",")
     if origin.strip()
 ]
