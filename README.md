@@ -1,8 +1,8 @@
 # DOTNXS (`.nxs`)
 
-DOTNXS is a single-file archive format for AI/LLM artifacts. One `.nxs` file contains internal tensor, asset, and later dataset chunks, with an index intended to support selective reads and RAM-budgeted caching.
+DOTNXS is a single-file archive format for AI/LLM artifacts. One `.nxs` file contains internal tensor and asset chunks, with a manifest for selective reads and bounded caching.
 
-The project is converter-first. The CLI wraps a C++17/pybind11 native archive writer, while Python handles source-format metadata and conversion orchestration. The streaming Safetensors converter preserves tensor bytes; model runtime is not implemented yet. GitHub Actions builds and tests the native wheel on Linux, macOS, and Windows.
+The CLI wraps a C++17/pybind11 archive writer, while Python handles conversion and the experimental streamed Inkling runtime. The runtime reads the original `Inkling-2-Mini.nxs` directly, pages dense tensors and selected NVFP4/MXFP8 experts on demand, and keeps the NXS chunk cache capped at 200 MiB. GitHub Actions builds and tests the native wheel on Linux, macOS, and Windows.
 
 - [Format specification](FORMAT.md)
 - [Python package and CLI](pyproject.toml)
@@ -38,14 +38,26 @@ python -m pip install 'dotnxs[hf]'
 dotnxs convert hf thinkingmachines/Inkling-2-Mini inkling.nxs
 ```
 
-`hf2nxs` reads the Hub file index and fetches Safetensors tensor ranges over HTTP into one `.nxs` archive, avoiding a full local checkpoint copy. Range requests must be supported by the serving endpoint. GGUF and Parquet converters and model inference runtime remain future work.
+`hf2nxs` reads the Hub file index and fetches Safetensors tensor ranges over HTTP into one `.nxs` archive, avoiding a full local checkpoint copy. Range requests must be supported by the serving endpoint.
 
-Run the converter tests with:
+## Experimental Inkling runtime and Render demo
+
+Install the CPU runtime dependencies with `python -m pip install '.[runtime]'`. The experimental text runner uses Transformers' Inkling architecture and fetches the checkpoint from `rmaaorg/Inkling-2-Mini-NXS`; it does not stage the whole model locally. The demo source is split into:
+
+- `website/`: static chat frontend for `dotnxs.rmaa.pk`.
+- `server/`: FastAPI/SSE CPU API that streams responses from the NXS-backed runner.
+- `render.yaml`: Render Blueprint for the static site and API service.
+
+The API Blueprint selects Render's `2c-4g` plan (2 CPUs, 4 GB RAM); this is a paid plan. The 200 MiB setting bounds the verified NXS chunk cache, not all process memory. The model executes 48 layer applications per token, so response latency can be high.
+
+Validation so far: tokenizer initialization and one real decoder layer have run using the public NXS archive. A full 48-application end-to-end chat generation has not yet completed or been performance-validated.
+
+Run the converter and runtime unit tests with:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The current tests use a tiny generated fixture. A full Inkling 2 Mini conversion and inference run have **not** been performed yet.
+Most unit tests use tiny generated fixtures. The one-layer live check is not an end-to-end model-generation test.
 
 The format's 20-byte signature is fixed. Its 16-byte suffix is a UUIDv4-derived value for a very low accidental-collision probability, not a claim of globally guaranteed uniqueness.
