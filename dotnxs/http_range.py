@@ -135,6 +135,12 @@ class HTTPRangeReader:
         finally:
             response.close()
 
+    def clear_cache(self) -> None:
+        """Drop the single read-ahead buffer without closing the HTTP reader."""
+        self._check_open()
+        self._cache_start = self._position
+        self._cache = b""
+
     def _check_open(self) -> None:
         if self._closed:
             raise ValueError("I/O operation on closed HTTPRangeReader")

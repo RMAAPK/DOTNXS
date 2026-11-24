@@ -9,6 +9,7 @@ because layer parameters are swapped in and out during each forward pass.
 
 from __future__ import annotations
 
+import gc
 import os
 import re
 import tempfile
@@ -42,6 +43,10 @@ class StreamedInklingRunner:
         self._install_streaming_io()
         self._install_layer_hooks()
         self.tokenizer = self._load_tokenizer()
+        # Tokenizer assets are small but span many NXS chunks. They are now in
+        # the tokenizer object, so release those raw archive buffers before chat.
+        self.weights.archive.clear_cache()
+        gc.collect()
 
     @classmethod
     def from_hf_repo(

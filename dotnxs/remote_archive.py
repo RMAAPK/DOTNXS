@@ -417,6 +417,13 @@ class RemoteNxsArchive:
         expert_bytes = entry["nbytes"] // n_experts
         return self.read_entry_range(name, expert_id * expert_bytes, expert_bytes)
 
+    def clear_cache(self) -> None:
+        """Free cached payload/asset chunks while keeping the NXS reader open."""
+        with self._cache_lock:
+            self._chunk_cache.clear()
+            self.cache_bytes = 0
+        self._reader.clear_cache()
+
     @property
     def cache_stats(self) -> dict[str, int]:
         with self._cache_lock:

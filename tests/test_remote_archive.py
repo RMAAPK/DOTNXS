@@ -86,6 +86,10 @@ class RemoteNxsArchiveTests(unittest.TestCase):
             self.assertEqual(after_read["network_ranges"], before_read["network_ranges"])
             self.assertEqual(after_read["used_bytes"], 8)
             self.assertGreaterEqual(after_read["hits"], 2)
+            archive.clear_cache()
+            self.assertEqual(archive.cache_stats["used_bytes"], 0)
+            self.assertEqual(archive.read_entry("payload"), b"abcdefgh")
+            self.assertGreater(archive.cache_stats["network_ranges"], before_read["network_ranges"])
 
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "install dotnxs[runtime] for CPU inference test")
     def test_real_sparse_moe_path_over_a_local_nxs_archive(self):
