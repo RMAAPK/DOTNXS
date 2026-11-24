@@ -11,7 +11,7 @@
 
 Render's service Root Directory is `server/`, so commits that only change `dotnxs/` do not trigger its auto-deploy. The Docker build fetches `dotnxs` from GitHub `main`; redeploy the API after runtime-only package changes.
 
-The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-server.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge.
+The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-server.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge. The worker releases temporary tokenizer/bootstrap archive buffers after initialization to reduce startup RSS.
 
 ## Free-plan limits
 

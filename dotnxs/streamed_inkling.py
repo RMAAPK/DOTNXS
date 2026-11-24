@@ -196,6 +196,7 @@ class StreamedInklingRunner:
         self._global_entries: list[tuple[str, str]] = []
         self._message_query_entries: dict[str, dict] = {}
         self._index_entries()
+        del self._meta_state
 
     def _map_source(self, source_name: str) -> tuple[str, str | None]:
         return self._rename_source_key(
@@ -406,7 +407,17 @@ class StreamedInklingRunner:
             raise ValueError("NXS archive does not include tokenizer.json")
         self._tokenizer_tempdir = tempfile.TemporaryDirectory(prefix="dotnxs-tokenizer-")
         tokenizer_path = Path(self._tokenizer_tempdir.name) / "tokenizer.json"
-        tokenizer_path.write_bytes(self.weights.archive.read_entry(entry_name))
+        archive = self.weights.archive
+        cache_limit = archive.cache_limit_bytes
+        archive.clear_cache()
+        archive.cache_limit_bytes = 0
+        try:
+            tokenizer_payload = archive.read_entry(entry_name)
+        finally:
+            archive.cache_limit_bytes = cache_limit
+            archive.clear_cache()
+        tokenizer_path.write_bytes(tokenizer_payload)
+        del tokenizer_payload
         backend = Tokenizer.from_file(str(tokenizer_path))
         return _NxsTextTokenizer(backend, self.torch)
 
