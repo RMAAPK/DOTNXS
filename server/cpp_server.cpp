@@ -151,11 +151,13 @@ void proxy_to_worker(const httplib::Request &request, httplib::Response &respons
         upstream = worker.Get(path);
     }
     if (!upstream) {
+        response.status = 503;
+        response.set_header("Retry-After", "30");
         if (path == "/health") {
-            response.status = 200;
-            response.set_content(R"({"status":"loading"})", "application/json");
+            response.set_content(
+                R"({"status":"unavailable","detail":"The model worker is not running; check Render memory/startup logs."})",
+                "application/json");
         } else {
-            response.status = 503;
             response.set_content(R"({"detail":"The local model worker is unavailable."})", "application/json");
         }
         return;

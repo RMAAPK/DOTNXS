@@ -65,7 +65,17 @@ export default function App() {
       setServerStatus(isReady ? "CPU server ready" : "Warming up model");
     } catch (error) {
       setReady(false);
-      setServerStatus("Waiting for Render");
+      setServerStatus("Server unavailable");
+      setMessages((previous) => {
+        const index = previous.findIndex((message) => message.welcome);
+        if (index < 0) return previous;
+        const next = [...previous];
+        next[index] = {
+          ...next[index],
+          content: `Render API is unavailable: ${error.message}. Check the server memory limit and startup status.`,
+        };
+        return next;
+      });
     }
   }, []);
 
