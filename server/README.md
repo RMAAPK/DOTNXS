@@ -9,6 +9,8 @@
 3. The current Render API URL is `https://dotnxs-server.onrender.com` (service `DOTNXS-Server`); it is set in `website/public/config.js`. If Render assigns a different service URL, update that file and redeploy the static site.
 4. Set the service environment variables if needed: `NXS_REPO_ID`, `NXS_FILENAME`, `DOTNXS_CACHE_BYTES`, `DOTNXS_MAX_CONTEXT_TOKENS`, `DOTNXS_MAX_NEW_TOKENS`, and `CORS_ORIGINS`. Defaults are set for the public NXS repo and `dotnxs.rmaa.pk`.
 
+Render's service Root Directory is `server/`, so commits that only change `dotnxs/` do not trigger its auto-deploy. The Docker build fetches `dotnxs` from GitHub `main`; redeploy the API after runtime-only package changes.
+
 The C++ service has `/ping`, which returns `pong` without initializing the model. Render Free sleeps after 15 idle minutes. `website/public/ping.html` can ping every ten minutes while open; for a background heartbeat, set the GitHub repository variable `RENDER_PING_URL` to `https://dotnxs-server.onrender.com/ping`. The scheduled GitHub Actions workflow calls it every ten minutes. This avoids ten separate Render Cron services, each of which has a minimum charge.
 
 ## Free-plan limits

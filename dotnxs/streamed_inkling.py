@@ -22,6 +22,84 @@ from .inkling_runtime import Inkling2MiniWeights
 _LAYER_SOURCE_RE = re.compile(r"^model\.llm\.layers\.(\d+)\.")
 
 
+class _NxsTextTokenizer:
+    """Small tokenizer adapter rendering Inkling's text-only chat template."""
+
+    ROLE_TOKENS = {
+        "user": "<|message_user|>",
+        "assistant": "<|message_model|>",
+        "system": "<|message_system|>",
+    }
+    REASONING_EFFORT = {
+        "none": 0.0,
+        "minimal": 0.1,
+        "low": 0.2,
+        "medium": 0.7,
+        "high": 0.9,
+        "xhigh": 0.99,
+        "max": 0.99,
+    }
+
+    def __init__(self, tokenizer, torch_module) -> None:
+        self.backend = tokenizer
+        self.torch = torch_module
+
+    def apply_chat_template(
+        self,
+        messages,
+        *,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors=None,
+        reasoning_effort="low",
+    ):
+        if isinstance(reasoning_effort, str):
+            try:
+                effort = self.REASONING_EFFORT[reasoning_effort.strip()]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported reasoning effort: {reasoning_effort}") from exc
+        else:
+            effort = float(reasoning_effort)
+        if not 0.0 <= effort <= 0.99:
+            raise ValueError("reasoning_effort must be in [0.0, 0.99]")
+        effort_text = "0" if effort == 0.0 else str(effort)
+        pieces = []
+        effort_pending = True
+        for message in messages:
+            role = message.get("role")
+            if role not in self.ROLE_TOKENS:
+                raise ValueError(f"Unsupported text chat role: {role!r}")
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                raise ValueError("The Render demo accepts text-only chat messages")
+            if effort_pending and role != "system":
+                pieces.append(
+                    "<|message_system|><|content_text|>Thinking effort level: "
+                    + effort_text
+                    + "<|end_message|>"
+                )
+                effort_pending = False
+            pieces.append(self.ROLE_TOKENS[role] + "<|content_text|>" + content + "<|end_message|>")
+            if role == "assistant":
+                pieces.append("<|content_model_end_sampling|>")
+        if effort_pending:
+            pieces.append(
+                "<|message_system|><|content_text|>Thinking effort level: "
+                + effort_text
+                + "<|end_message|>"
+            )
+        rendered = "".join(pieces)
+        if not tokenize:
+            return rendered
+        ids = self.backend.encode(rendered).ids
+        if return_tensors == "pt":
+            return self.torch.tensor([ids], dtype=self.torch.long)
+        return ids
+
+    def decode(self, token_ids, *, skip_special_tokens=True):
+        return self.backend.decode(list(map(int, token_ids)), skip_special_tokens=skip_special_tokens)
+
+
 class StreamedInklingRunner:
     """Run text-only Inkling 2 Mini forwards using weights paged from one NXS file."""
 
@@ -319,36 +397,18 @@ class StreamedInklingRunner:
 
     def _load_tokenizer(self):
         try:
-            from transformers import AutoTokenizer
+            from tokenizers import Tokenizer
         except ImportError as exc:
-            raise RuntimeError("Text generation requires the Transformers tokenizer package") from exc
+            raise RuntimeError("Text generation requires tokenizers; install dotnxs[runtime]") from exc
 
+        entry_name = "asset/tokenizer.json"
+        if entry_name not in self.weights.entry_names:
+            raise ValueError("NXS archive does not include tokenizer.json")
         self._tokenizer_tempdir = tempfile.TemporaryDirectory(prefix="dotnxs-tokenizer-")
-        folder = Path(self._tokenizer_tempdir.name)
-        copied = False
-        for filename in (
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "chat_template.jinja",
-            "generation_config.json",
-        ):
-            entry_name = f"asset/{filename}"
-            if entry_name in self.weights.entry_names:
-                (folder / filename).write_bytes(self.weights.archive.read_entry(entry_name))
-                copied = True
-        if not copied or not (folder / "tokenizer.json").exists():
-            raise ValueError("NXS archive does not include the tokenizer assets required for text chat")
-        tokenizer = AutoTokenizer.from_pretrained(
-            folder,
-            use_fast=True,
-            local_files_only=True,
-            trust_remote_code=False,
-        )
-        template_path = folder / "chat_template.jinja"
-        if template_path.exists():
-            tokenizer.chat_template = template_path.read_text(encoding="utf-8")
-        return tokenizer
+        tokenizer_path = Path(self._tokenizer_tempdir.name) / "tokenizer.json"
+        tokenizer_path.write_bytes(self.weights.archive.read_entry(entry_name))
+        backend = Tokenizer.from_file(str(tokenizer_path))
+        return _NxsTextTokenizer(backend, self.torch)
 
     def stream_chat(self, messages: list[dict[str, str]], *, max_new_tokens: int = 24):
         """Yield the growing assistant reply; uses greedy decoding and a bounded context."""
