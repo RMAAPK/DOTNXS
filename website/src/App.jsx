@@ -51,6 +51,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
+  const warmingSinceRef = useRef(null);
   const wide = width >= 820;
 
   const checkHealth = useCallback(async () => {
@@ -62,7 +63,28 @@ export default function App() {
       }
       const isReady = health.status === "ready";
       setReady(isReady);
-      setServerStatus(isReady ? "CPU server ready" : "Warming up model");
+      if (isReady) {
+        warmingSinceRef.current = null;
+        setServerStatus("CPU server ready");
+      } else {
+        if (warmingSinceRef.current === null) warmingSinceRef.current = Date.now();
+        const warmupSeconds = (Date.now() - warmingSinceRef.current) / 1000;
+        if (warmupSeconds >= 90) {
+          setServerStatus("Worker not ready — check Render memory/logs");
+          setMessages((previous) => {
+            const index = previous.findIndex((message) => message.welcome);
+            if (index < 0) return previous;
+            const next = [...previous];
+            next[index] = {
+              ...next[index],
+              content: "The model worker has not become ready after 90 seconds. Check the Render server logs and memory plan; the frontend will keep retrying.",
+            };
+            return next;
+          });
+        } else {
+          setServerStatus("Warming up model");
+        }
+      }
     } catch (error) {
       setReady(false);
       setServerStatus("Server unavailable");
