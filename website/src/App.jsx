@@ -341,7 +341,7 @@ export default function App() {
           <View style={styles.chips}>
             <Text style={styles.chip}>single .nxs</Text>
             <Text style={styles.chip}>C++ API · CPU worker</Text>
-            <Text style={styles.chip}>32 MiB RAM chunk cache</Text>
+            <Text style={styles.chip}>16 MiB RAM chunk cache</Text>
             <Text style={styles.chip}>{(storageCacheLimitBytes / 1024 ** 3).toFixed(1)} GiB hot tensor cache</Text>
             <Text style={styles.chip}>Apache-2.0 model</Text>
           </View>
@@ -417,7 +417,7 @@ export default function App() {
             <View style={styles.sidePanel}>
               <Text style={styles.eyebrow}>MEMORY POLICY</Text>
               <Text style={styles.sideTitle}>File-backed tensor cache</Text>
-              <Text style={styles.sideHint}>Effective cap: {(storageCacheLimitBytes / 1024 ** 3).toFixed(2)} GiB · currently {(storageCacheUsedBytes / 1024 ** 3).toFixed(2)} GiB used. RAM chunk cache: 32 MiB. Mapped file pages still use reclaimable system memory.</Text>
+              <Text style={styles.sideHint}>Effective cap: {(storageCacheLimitBytes / 1024 ** 3).toFixed(2)} GiB · currently {(storageCacheUsedBytes / 1024 ** 3).toFixed(2)} GiB used. RAM chunk cache: 16 MiB. Mapped file pages still use reclaimable system memory.</Text>
             </View>
           </View>
         </View>

@@ -22,7 +22,7 @@ logger = logging.getLogger("dotnxs.server")
 
 NXS_REPO_ID = os.getenv("NXS_REPO_ID", "rmaaorg/Inkling-2-Mini-NXS")
 NXS_FILENAME = os.getenv("NXS_FILENAME", "Inkling-2-Mini.nxs")
-CACHE_BYTES = int(os.getenv("DOTNXS_CACHE_BYTES", str(32 * 1024 * 1024)))
+CACHE_BYTES = int(os.getenv("DOTNXS_CACHE_BYTES", str(16 * 1024 * 1024)))
 STORAGE_CACHE_BYTES = int(os.getenv("DOTNXS_STORAGE_CACHE_BYTES", str(5 * 1024 * 1024 * 1024)))
 STORAGE_CACHE_RESERVE_BYTES = int(os.getenv("DOTNXS_STORAGE_CACHE_RESERVE_BYTES", str(256 * 1024 * 1024)))
 STORAGE_CACHE_DIR = os.getenv("DOTNXS_STORAGE_CACHE_DIR") or None

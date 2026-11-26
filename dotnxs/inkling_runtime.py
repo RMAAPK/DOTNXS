@@ -223,7 +223,7 @@ class Inkling2MiniWeights:
         softcap = float(text_config.get("final_logit_softcapping", 30.0))
         return softcap * np.tanh(logits / softcap)
 
-    def prefetch_entries(self, entry_names: Iterable[str], *, max_workers: int = 16) -> dict[str, int]:
+    def prefetch_entries(self, entry_names: Iterable[str], *, max_workers: int = 4) -> dict[str, int]:
         """Prefetch selected complete entries concurrently without expanding the cache cap."""
         ranges = []
         for name in dict.fromkeys(entry_names):
@@ -232,7 +232,7 @@ class Inkling2MiniWeights:
         return self.archive.prefetch_entry_ranges(ranges, max_workers=max_workers)
 
     def prefetch_routed_experts(
-        self, layer_id: int, expert_ids: Iterable[int], *, max_workers: int = 16
+        self, layer_id: int, expert_ids: Iterable[int], *, max_workers: int = 4
     ) -> dict[str, int]:
         """Prefetch just the tensors/ranges for a selected expert set, in parallel."""
         ids = list(dict.fromkeys(expert_ids))

@@ -149,7 +149,7 @@ class StreamedInklingRunner:
         filename: str = "Inkling-2-Mini.nxs",
         *,
         revision: str = "main",
-        cache_bytes: int = 32 * 1024 * 1024,
+        cache_bytes: int = 16 * 1024 * 1024,
         max_context_tokens: int = 128,
         load_tokenizer: bool = True,
         storage_cache_dir: str | os.PathLike[str] | None = None,

@@ -2,7 +2,7 @@
 
 DOTNXS is a single-file archive format for AI/LLM artifacts. One `.nxs` file contains internal tensor and asset chunks, with a manifest for selective reads and bounded caching.
 
-The CLI wraps a C++17/pybind11 archive writer, while Python handles conversion and the experimental streamed Inkling runtime. The runtime reads the original `Inkling-2-Mini.nxs` directly, memory-maps dense tensors from a bounded temporary storage cache, and uses Numba JIT matvec kernels on selected NVFP4/MXFP8 expert files without constructing full float32 expert matrices. The default RAM chunk cache is 32 MiB; the file-backed tensor cache is capped at 5 GiB or the available filesystem space, whichever is lower. GitHub Actions builds and tests the native wheel on Linux, macOS, and Windows.
+The CLI wraps a C++17/pybind11 archive writer, while Python handles conversion and the experimental streamed Inkling runtime. The runtime reads the original `Inkling-2-Mini.nxs` directly, memory-maps dense tensors from a bounded temporary storage cache, and uses Numba JIT matvec kernels on selected NVFP4/MXFP8 expert files without constructing full float32 expert matrices. The default RAM chunk cache is 16 MiB; the file-backed tensor cache is capped at 5 GiB or the available filesystem space, whichever is lower. GitHub Actions builds and tests the native wheel on Linux, macOS, and Windows.
 
 - [Format specification](FORMAT.md)
 - [Python package and CLI](pyproject.toml)
@@ -53,7 +53,7 @@ Create a Render Static Site with Root Directory `website` and Publish Directory 
 
 Render's Free web plan has 512 MB RAM. Dense tensors are now mapped from temporary files instead of copied into anonymous Torch buffers, while selected expert matvecs JIT-decode packed NXS data from file-backed mappings. The NXS source remains range-read remotely. File-backed pages still use reclaimable system memory, so this reduces copies but is not a guarantee that the full model fits. The temporary tensor cache is capped at 5 GiB and is lost when the Free service restarts or spins down. The Free service also sleeps after 15 minutes without inbound requests. `website/public/ping.html` offers a ten-minute heartbeat while open, and `.github/workflows/render-ping.yml` can ping `/ping` on a schedule. Scheduled pings consume the workspace's Free instance hours; they do not bypass Render's monthly limits.
 
-The server may still need a paid Render plan for reliable RAM and CPU. The 32 MiB value bounds the RAM chunk cache, while up to 5 GiB of dense tensor files can be cached in temporary storage; neither number bounds all process memory. Inkling executes 48 layer applications per generated token, so CPU responses can be slow.
+The server may still need a paid Render plan for reliable RAM and CPU. The 16 MiB value bounds the RAM chunk cache, while up to 5 GiB of dense tensor files can be cached in temporary storage; neither number bounds all process memory. Inkling executes 48 layer applications per generated token, so CPU responses can be slow.
 
 Validation so far: tokenizer initialization and one real decoder layer have run using the public NXS archive. A GitHub Actions workflow is configured to compile and smoke-test the C++ gateway; the Docker image and full 48-application chat generation have not yet completed end-to-end validation.
 
