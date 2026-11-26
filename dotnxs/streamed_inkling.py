@@ -113,7 +113,7 @@ class StreamedInklingRunner:
         max_context_tokens: int = 128,
         load_tokenizer: bool = True,
         storage_cache_dir: str | os.PathLike[str] | None = None,
-        storage_cache_bytes: int = 5 * 1024 * 1024 * 1024,
+        storage_cache_bytes: int = 1_342_177_280,
         storage_cache_reserve_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         if max_context_tokens <= 0:
@@ -153,7 +153,7 @@ class StreamedInklingRunner:
         max_context_tokens: int = 128,
         load_tokenizer: bool = True,
         storage_cache_dir: str | os.PathLike[str] | None = None,
-        storage_cache_bytes: int = 5 * 1024 * 1024 * 1024,
+        storage_cache_bytes: int = 1_342_177_280,
         storage_cache_reserve_bytes: int = 256 * 1024 * 1024,
         token: str | None = None,
     ) -> "StreamedInklingRunner":

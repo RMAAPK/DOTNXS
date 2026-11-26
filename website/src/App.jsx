@@ -50,7 +50,7 @@ export default function App() {
   const [tokenizerRevision, setTokenizerRevision] = useState("");
   const [tokenizerError, setTokenizerError] = useState("");
   const [maxContextTokens, setMaxContextTokens] = useState(INKLING_MAX_CONTEXT_FALLBACK);
-  const [storageCacheLimitBytes, setStorageCacheLimitBytes] = useState(5 * 1024 * 1024 * 1024);
+  const [storageCacheLimitBytes, setStorageCacheLimitBytes] = useState(1_342_177_280);
   const [storageCacheUsedBytes, setStorageCacheUsedBytes] = useState(0);
   const ready = modelReady && tokenizerReady && tokenizerRevision === modelRevision;
   const [messages, setMessages] = useState([
