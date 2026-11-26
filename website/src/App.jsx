@@ -250,7 +250,20 @@ export default function App() {
           buffer = buffer.slice(splitAt + 2);
           const parsed = parseEvent(block);
           if (!parsed) continue;
-          if (parsed.event === "token") {
+          if (parsed.event === "status" && parsed.payload.status === "generating") {
+            setServerStatus("Generating on Render Free CPU");
+            setMessages((previous) => {
+              const next = [...previous];
+              const currentIndex = next.findIndex((message) => message.pending);
+              if (currentIndex >= 0) {
+                next[currentIndex] = {
+                  ...next[currentIndex],
+                  content: "Inference has started. The first token can take a long time on this small CPU; you can wait or press Stop.",
+                };
+              }
+              return next;
+            });
+          } else if (parsed.event === "token") {
             if (!Number.isInteger(parsed.payload.id)) throw new Error("The API returned an invalid token ID.");
             generatedIds.push(parsed.payload.id);
             answer = decodeInklingTokens(tokenizer, generatedIds);
