@@ -9,8 +9,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compile C++ HTTP gateway
-        run: g++ -O2 -std=c++17 -pthread -Iserver server/cpp_server.cpp -o "$RUNNER_TEMP/dotnxs-gateway"
+      - name: Install native NXS reader build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev nlohmann-json3-dev
+      - name: Compile C++ HTTP gateway and NXS reader
+        run: g++ -O2 -std=c++17 -pthread -Iserver -Iserver/native server/cpp_server.cpp server/native/nxs_remote_archive.cpp -lcurl -lcrypto -o "$RUNNER_TEMP/dotnxs-gateway"
+      - name: Compile C++ NXS reader smoke test
+        run: g++ -O2 -std=c++17 -pthread -Iserver/native tests/cpp_nxs_reader_smoke.cpp server/native/nxs_remote_archive.cpp -lcurl -lcrypto -o "$RUNNER_TEMP/nxs-reader-smoke"
+      - name: Test C++ NXS reader with a local ranged archive fixture
+        shell: bash
+        run: |
+          PYTHONPATH=. python tests/cpp_nxs_fixture.py create "$RUNNER_TEMP/cpp-smoke.nxs"
+          PYTHONPATH=. python tests/cpp_nxs_fixture.py serve "$RUNNER_TEMP/cpp-smoke.nxs" 18082 > "$RUNNER_TEMP/cpp-nxs-fixture.log" 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if curl --silent --show-error --max-time 2 http://127.0.0.1:18082/model.nxs >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          "$RUNNER_TEMP/nxs-reader-smoke" http://127.0.0.1:18082/model.nxs
       - name: Verify pong, health, and streamed chat proxy
         shell: bash
         run: |
@@ -39,9 +57,28 @@ jobs:
           health="$(curl --silent --show-error http://127.0.0.1:18080/health)"
           echo "C++ gateway health: $health"
           grep -q '"status":"ready"' <<< "$health"
-          reply="$(curl --silent --show-error --no-buffer --max-time 30 -H 'Content-Type: application/json' --data '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:18080/v1/chat)"
+          reply="$(curl --silent --show-error --no-buffer --max-time 30 -H 'Content-Type: application/json' --data '{"input_ids":[200002,200004,1910]}' http://127.0.0.1:18080/v1/chat)"
           echo "C++ gateway streamed reply: $reply"
           grep -q 'event: token' <<< "$reply"
-          grep -q 'gateway smoke reply' <<< "$reply"
+          grep -q '"id":42' <<< "$reply"
       - name: Build Render Docker image with the configured server context
         run: docker build --file server/Dockerfile --tag dotnxs-render-api:ci server
+
+  website-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install website dependencies
+        run: npm ci
+      - name: Test client tokenizer and prompt rendering
+        run: npm test
+      - name: Build static website
+        run: npm run build

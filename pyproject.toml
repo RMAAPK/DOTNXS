@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 
 [project.optional-dependencies]
 hf = ["huggingface_hub>=0.30"]
-runtime = ["huggingface_hub>=0.30", "numpy>=1.26", "requests>=2.31", "torch>=2.5", "transformers>=5.24.0"]
+runtime = ["huggingface_hub>=0.30", "numpy>=1.26", "numba>=0.61", "requests>=2.31", "torch>=2.5", "transformers>=5.24.0"]
 
 [project.scripts]
 dotnxs = "dotnxs.cli:main"

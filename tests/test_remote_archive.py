@@ -4,11 +4,13 @@ import struct
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from dotnxs.archive import NxsWriter
 from dotnxs.remote_archive import RemoteNxsArchive
+from dotnxs.storage_cache import FileBackedTensorCache
 
 
 class _NxsRangeHandler(BaseHTTPRequestHandler):
@@ -179,11 +181,48 @@ class RemoteNxsArchiveTests(unittest.TestCase):
         with RemoteNxsArchive(url, file_size, cache_bytes=1024 * 1024) as archive:
             from dotnxs.inkling_runtime import Inkling2MiniWeights
 
-            weights = Inkling2MiniWeights(archive)
-            output = weights.run_moe_layer(0, np.ones(16, dtype=np.float32))
+            storage_cache = FileBackedTensorCache(
+                Path(self.temp_dir.name) / "hot-cache",
+                max_bytes=8 * 1024 * 1024,
+                reserve_bytes=0,
+            )
+            weights = Inkling2MiniWeights(archive, storage_cache=storage_cache)
+            hidden = np.ones(16, dtype=np.float32)
+            output = weights.run_moe_layer(0, hidden)
             self.assertEqual(output.shape, (16,))
             self.assertTrue(np.isfinite(output).all())
             self.assertGreater(float(np.abs(output).sum()), 0.0)
+            self.assertGreater(storage_cache.used_bytes, 0)
+            ranges_after_first_run = archive.cache_stats["network_ranges"]
+            cached_output = weights.run_moe_layer(0, hidden)
+            np.testing.assert_allclose(cached_output, output)
+            self.assertEqual(archive.cache_stats["network_ranges"], ranges_after_first_run)
+            reference = weights.decode_expert_matrices(0, 0)
+            from dotnxs.inkling_kernels import run_expert_mlp
+
+            expected = run_expert_mlp(
+                hidden,
+                reference["gate_up"],
+                reference["down"],
+                bfloat16=True,
+            )
+            mapped = weights.run_routed_experts(
+                0,
+                hidden[None, :],
+                np.asarray([[0]], dtype=np.int64),
+                np.asarray([[1.0]], dtype=np.float32),
+                bfloat16=True,
+            )
+            np.testing.assert_allclose(mapped[0], expected, rtol=1e-5, atol=1e-5)
+            with patch("dotnxs.inkling_kernels._numba_nvfp4_matvec", None):
+                fallback = weights.run_routed_experts(
+                    0,
+                    hidden[None, :],
+                    np.asarray([[0]], dtype=np.int64),
+                    np.asarray([[1.0]], dtype=np.float32),
+                    bfloat16=True,
+                )
+            np.testing.assert_allclose(fallback[0], expected, rtol=1e-5, atol=1e-5)
 
             embedding_row = weights.embed_token(1)
             np.testing.assert_array_equal(embedding_row, np.ones(16, dtype=np.float32))

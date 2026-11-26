@@ -1,7 +1,7 @@
 FROM python:3.12-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git \
+    build-essential cmake git libcurl4-openssl-dev libssl-dev nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -11,7 +11,7 @@ RUN python -m pip wheel --no-build-isolation --no-deps \
 
 WORKDIR /src
 COPY . .
-RUN g++ -O2 -std=c++17 -pthread -I. cpp_server.cpp -o /dotnxs-gateway
+RUN g++ -O2 -std=c++17 -pthread -I. -Inative cpp_server.cpp native/nxs_remote_archive.cpp -lcurl -lcrypto -o /dotnxs-gateway
 
 FROM python:3.12-slim AS runtime
 
@@ -26,7 +26,7 @@ ENV PYTHONUNBUFFERED=1 \
     MALLOC_ARENA_MAX=2
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libgomp1 libstdc++6 \
+    ca-certificates libcurl4 libssl3 libgomp1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 COPY . /app
 COPY --from=build /wheels /wheels

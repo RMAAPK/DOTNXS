@@ -9,9 +9,15 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
+import {
+  decodeInklingTokens,
+  encodeInklingConversation,
+  INKLING_MAX_CONTEXT_FALLBACK,
+  loadInklingTokenizer,
+} from "./inklingTokenizer";
 
 const API_BASE = String(
-  window.DOTNXS_CONFIG?.apiBaseUrl || "https://dotnxs-inkling-api.onrender.com",
+  window.DOTNXS_CONFIG?.apiBaseUrl || "https://dotnxs-server.onrender.com",
 ).replace(/\/$/, "");
 const COLORS = {
   background: "#080c18",
@@ -38,7 +44,15 @@ function parseEvent(block) {
 export default function App() {
   const { width } = useWindowDimensions();
   const [serverStatus, setServerStatus] = useState("Checking Render server");
-  const [ready, setReady] = useState(false);
+  const [modelReady, setModelReady] = useState(false);
+  const [modelRevision, setModelRevision] = useState("");
+  const [tokenizerReady, setTokenizerReady] = useState(false);
+  const [tokenizerRevision, setTokenizerRevision] = useState("");
+  const [tokenizerError, setTokenizerError] = useState("");
+  const [maxContextTokens, setMaxContextTokens] = useState(INKLING_MAX_CONTEXT_FALLBACK);
+  const [storageCacheLimitBytes, setStorageCacheLimitBytes] = useState(5 * 1024 * 1024 * 1024);
+  const [storageCacheUsedBytes, setStorageCacheUsedBytes] = useState(0);
+  const ready = modelReady && tokenizerReady && tokenizerRevision === modelRevision;
   const [messages, setMessages] = useState([
     {
       role: "assistant",
@@ -50,6 +64,7 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const abortRef = useRef(null);
+  const tokenizerRef = useRef(null);
   const scrollRef = useRef(null);
   const warmingSinceRef = useRef(null);
   const wide = width >= 820;
@@ -61,11 +76,30 @@ export default function App() {
       if (!response.ok || health.status === "error") {
         throw new Error(health.detail || "Render API is unavailable");
       }
+      if (health.status === "ready" && health.input_protocol !== "token_ids_v1") {
+        warmingSinceRef.current = null;
+        setModelReady(false);
+        setServerStatus("Waiting for API update");
+        return;
+      }
+      if (health.status === "ready" && !/^[a-f0-9]{40}$/i.test(health.model_revision || "")) {
+        setModelReady(false);
+        setServerStatus("Waiting for model revision");
+        return;
+      }
       const isReady = health.status === "ready";
-      setReady(isReady);
+      setModelReady(isReady);
       if (isReady) {
         warmingSinceRef.current = null;
-        setServerStatus("CPU server ready");
+        setModelRevision(health.model_revision);
+        const contextLimit = Number(health.max_context_tokens);
+        if (Number.isInteger(contextLimit) && contextLimit > 0) setMaxContextTokens(contextLimit);
+        const storageLimit = Number(health.storage_cache_limit_bytes);
+        const storageUsed = Number(health.storage_cache_used_bytes);
+        if (Number.isFinite(storageLimit) && storageLimit >= 0) setStorageCacheLimitBytes(storageLimit);
+        if (Number.isFinite(storageUsed) && storageUsed >= 0) setStorageCacheUsedBytes(storageUsed);
+        const tokenizerMatches = tokenizerReady && tokenizerRevision === health.model_revision;
+        setServerStatus(tokenizerMatches ? "CPU server ready" : tokenizerError ? "Tokenizer unavailable" : "Loading tokenizer (~26 MB)");
       } else {
         if (warmingSinceRef.current === null) warmingSinceRef.current = Date.now();
         const warmupSeconds = (Date.now() - warmingSinceRef.current) / 1000;
@@ -86,7 +120,7 @@ export default function App() {
         }
       }
     } catch (error) {
-      setReady(false);
+      setModelReady(false);
       setServerStatus("Server unavailable");
       setMessages((previous) => {
         const index = previous.findIndex((message) => message.welcome);
@@ -99,7 +133,46 @@ export default function App() {
         return next;
       });
     }
-  }, []);
+  }, [tokenizerReady, tokenizerRevision, tokenizerError]);
+
+  useEffect(() => {
+    if (!modelRevision) return undefined;
+    let active = true;
+    setTokenizerReady(false);
+    setTokenizerRevision("");
+    setTokenizerError("");
+    tokenizerRef.current = null;
+    loadInklingTokenizer(modelRevision)
+      .then((tokenizer) => {
+        if (!active) return;
+        tokenizerRef.current = tokenizer;
+        setTokenizerRevision(modelRevision);
+        setTokenizerReady(true);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setTokenizerError(error.message);
+        setServerStatus("Tokenizer unavailable");
+        setMessages((previous) => {
+          const index = previous.findIndex((message) => message.welcome);
+          if (index < 0) return previous;
+          const next = [...previous];
+          next[index] = {
+            ...next[index],
+            content: `Could not load Inkling's browser tokenizer: ${error.message}. Check access to Hugging Face, then reload.`,
+          };
+          return next;
+        });
+      });
+    return () => { active = false; };
+  }, [modelRevision]);
+
+  useEffect(() => {
+    if (modelReady) {
+      const tokenizerMatches = tokenizerReady && tokenizerRevision === modelRevision;
+      setServerStatus(tokenizerMatches ? "CPU server ready" : tokenizerError ? "Tokenizer unavailable" : "Loading tokenizer (~26 MB)");
+    }
+  }, [modelReady, modelRevision, tokenizerReady, tokenizerRevision, tokenizerError]);
 
   useEffect(() => {
     checkHealth();
@@ -119,7 +192,21 @@ export default function App() {
 
     const userMessage = { role: "user", content };
     const requestMessages = [...conversation, userMessage];
-    setConversation(requestMessages);
+    const tokenizer = tokenizerRef.current;
+    if (!tokenizer || tokenizerRevision !== modelRevision) return;
+
+    let inputIds;
+    try {
+      inputIds = encodeInklingConversation(tokenizer, requestMessages, maxContextTokens);
+    } catch (error) {
+      setMessages((previous) => [
+        ...previous.filter((message) => !message.welcome),
+        userMessage,
+        { role: "assistant", content: error.message, error: true },
+      ]);
+      return;
+    }
+
     setMessages((previous) => [
       ...previous.filter((message) => !message.welcome),
       userMessage,
@@ -134,7 +221,7 @@ export default function App() {
       const response = await fetch(`${API_BASE}/v1/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ messages: requestMessages }),
+        body: JSON.stringify({ input_ids: inputIds }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -151,6 +238,7 @@ export default function App() {
       const decoder = new TextDecoder();
       let buffer = "";
       let answer = "";
+      const generatedIds = [];
       while (true) {
         const { value, done: finished } = await reader.read();
         buffer += decoder.decode(value || new Uint8Array(), { stream: !finished });
@@ -161,7 +249,9 @@ export default function App() {
           const parsed = parseEvent(block);
           if (!parsed) continue;
           if (parsed.event === "token") {
-            answer = parsed.payload.text || "";
+            if (!Number.isInteger(parsed.payload.id)) throw new Error("The API returned an invalid token ID.");
+            generatedIds.push(parsed.payload.id);
+            answer = decodeInklingTokens(tokenizer, generatedIds);
             setMessages((previous) => {
               const next = [...previous];
               const currentIndex = next.findIndex((message) => message.pending);
@@ -176,7 +266,11 @@ export default function App() {
       }
       if (buffer.trim()) {
         const parsed = parseEvent(buffer);
-        if (parsed?.event === "token") answer = parsed.payload.text || "";
+        if (parsed?.event === "token") {
+          if (!Number.isInteger(parsed.payload.id)) throw new Error("The API returned an invalid token ID.");
+          generatedIds.push(parsed.payload.id);
+          answer = decodeInklingTokens(tokenizer, generatedIds);
+        }
         if (parsed?.event === "error") throw new Error(parsed.payload.message || "Model inference failed.");
       }
       if (answer) {
@@ -195,7 +289,7 @@ export default function App() {
           return next;
         });
       }
-      setReady(true);
+      setModelReady(true);
       setServerStatus("CPU server ready");
     } catch (error) {
       const message = error.name === "AbortError" ? "Generation stopped." : error.message;
@@ -206,7 +300,7 @@ export default function App() {
         return next;
       });
       if (error.name !== "AbortError") {
-        setReady(false);
+        setModelReady(false);
         setServerStatus("Request failed");
       }
     } finally {
@@ -247,7 +341,8 @@ export default function App() {
           <View style={styles.chips}>
             <Text style={styles.chip}>single .nxs</Text>
             <Text style={styles.chip}>C++ API · CPU worker</Text>
-            <Text style={styles.chip}>200 MiB NXS cache</Text>
+            <Text style={styles.chip}>32 MiB RAM chunk cache</Text>
+            <Text style={styles.chip}>{(storageCacheLimitBytes / 1024 ** 3).toFixed(1)} GiB hot tensor cache</Text>
             <Text style={styles.chip}>Apache-2.0 model</Text>
           </View>
         </View>
@@ -305,7 +400,7 @@ export default function App() {
                 <Text style={styles.stopText}>Stop</Text>
               </Pressable>
             </View>
-            <Text style={styles.footnote}>Short prompts recommended · CPU streaming can be slow · 200 MiB archive cache</Text>
+            <Text style={styles.footnote}>~26 MB tokenizer downloads to your browser · oldest turns trimmed at {maxContextTokens} tokens · CPU streaming can be slow</Text>
           </View>
 
           <View style={styles.sideColumn}>
@@ -321,8 +416,8 @@ export default function App() {
             </View>
             <View style={styles.sidePanel}>
               <Text style={styles.eyebrow}>MEMORY POLICY</Text>
-              <Text style={styles.sideTitle}>200 MiB NXS cache</Text>
-              <Text style={styles.sideHint}>Verified chunks enter a lazy LRU cache. This is a cache limit, not the server's total RAM use.</Text>
+              <Text style={styles.sideTitle}>File-backed tensor cache</Text>
+              <Text style={styles.sideHint}>Effective cap: {(storageCacheLimitBytes / 1024 ** 3).toFixed(2)} GiB · currently {(storageCacheUsedBytes / 1024 ** 3).toFixed(2)} GiB used. RAM chunk cache: 32 MiB. Mapped file pages still use reclaimable system memory.</Text>
             </View>
           </View>
         </View>

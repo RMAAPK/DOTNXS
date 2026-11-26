@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+from unittest.mock import patch
 
 
 @unittest.skipUnless(importlib.util.find_spec("numpy"), "install dotnxs[runtime] to test NumPy CPU kernels")
@@ -95,6 +96,53 @@ class InklingKernelTests(unittest.TestCase):
         )
         self.assertEqual(tied.tolist(), [0, 1])
         np.testing.assert_allclose(tied_weights, [4.0, 4.0])
+
+    def test_file_backed_mxfp8_expert_runs_without_materializing_float_matrices(self):
+        import numpy as np
+
+        from dotnxs.inkling_kernels import (
+            deinterleave_gate_up_rows,
+            dequantize_mxfp8,
+            run_expert_mlp,
+            run_file_backed_expert_mlp,
+        )
+
+        w13 = np.full((64, 64), 0x38, dtype=np.uint8)  # E4M3 1.0
+        w13_scale = np.full((64, 2), 127, dtype=np.uint8)  # E8M0 1.0
+        w2 = np.full((64, 32), 0x38, dtype=np.uint8)
+        w2_scale = np.full((64, 1), 127, dtype=np.uint8)
+        tensors = {
+            "w13_weight": w13,
+            "w13_weight_scale": w13_scale,
+            "w2_weight": w2,
+            "w2_weight_scale": w2_scale,
+        }
+        hidden = np.ones(64, dtype=np.float32)
+        actual = run_file_backed_expert_mlp(
+            hidden,
+            tensors,
+            w13_shape=w13.shape,
+            w2_shape=w2.shape,
+            storage_dtype="F8_E4M3",
+            bfloat16=True,
+        )
+        reference = run_expert_mlp(
+            hidden,
+            deinterleave_gate_up_rows(dequantize_mxfp8(w13, w13_scale, shape=w13.shape)),
+            dequantize_mxfp8(w2, w2_scale, shape=w2.shape),
+            bfloat16=True,
+        )
+        np.testing.assert_allclose(actual, reference, rtol=1e-6, atol=1e-6)
+        with patch("dotnxs.inkling_kernels._numba_mxfp8_matvec", None):
+            fallback = run_file_backed_expert_mlp(
+                hidden,
+                tensors,
+                w13_shape=w13.shape,
+                w2_shape=w2.shape,
+                storage_dtype="F8_E4M3",
+                bfloat16=True,
+            )
+        np.testing.assert_allclose(fallback, reference, rtol=1e-6, atol=1e-6)
 
     def test_rejects_invalid_scale_grid(self):
         from dotnxs.inkling_kernels import dequantize_mxfp8, dequantize_nvfp4

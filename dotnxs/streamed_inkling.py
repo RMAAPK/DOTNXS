@@ -1,15 +1,17 @@
 """Experimental full-text Inkling runner with NXS-backed, per-layer CPU loading.
 
 The official Transformers implementation supplies the attention, loop, cache,
-and message-passing math. This adapter keeps dense layer tensors ephemeral,
-streams each selected MoE expert from the NXS archive, and reads the vocabulary
-head in bounded row blocks. It is intentionally CPU-only and serializes requests
-because layer parameters are swapped in and out during each forward pass.
+and message-passing math. Dense layer tensors are backed by checksum-verified
+files and mapped into Torch on demand; selected MoE experts are still streamed
+from the NXS archive, and the vocabulary head is read in bounded row blocks.
+The runner is CPU-only and serializes requests because layer parameters are
+swapped in and out during each forward pass.
 """
 
 from __future__ import annotations
 
 import gc
+import math
 import os
 import re
 import tempfile
@@ -18,6 +20,7 @@ import types
 from pathlib import Path
 
 from .inkling_runtime import Inkling2MiniWeights
+from .storage_cache import FileBackedTensorCache
 
 _LAYER_SOURCE_RE = re.compile(r"^model\.llm\.layers\.(\d+)\.")
 
@@ -108,21 +111,34 @@ class StreamedInklingRunner:
         weights: Inkling2MiniWeights,
         *,
         max_context_tokens: int = 128,
+        load_tokenizer: bool = True,
+        storage_cache_dir: str | os.PathLike[str] | None = None,
+        storage_cache_bytes: int = 5 * 1024 * 1024 * 1024,
+        storage_cache_reserve_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         if max_context_tokens <= 0:
             raise ValueError("max_context_tokens must be positive")
         self.weights = weights
         self.max_context_tokens = max_context_tokens
         self._lock = threading.RLock()
+        cache_dir = storage_cache_dir or os.getenv("DOTNXS_STORAGE_CACHE_DIR")
+        if cache_dir is None:
+            cache_dir = str(Path(tempfile.gettempdir()) / "dotnxs-tensor-cache")
+        self.storage_cache = FileBackedTensorCache(
+            cache_dir,
+            max_bytes=storage_cache_bytes,
+            reserve_bytes=storage_cache_reserve_bytes,
+        )
+        self.weights.storage_cache = self.storage_cache
         self._tokenizer_tempdir = None
         self._build_transformer()
         self._load_global_weights()
         self._install_streaming_experts()
         self._install_streaming_io()
         self._install_layer_hooks()
-        self.tokenizer = self._load_tokenizer()
-        # Tokenizer assets are small but span many NXS chunks. They are now in
-        # the tokenizer object, so release those raw archive buffers before chat.
+        self.tokenizer = self._load_tokenizer() if load_tokenizer else None
+        # Drop raw NXS chunks read for model initialization (and tokenizer loading,
+        # when enabled); active model tensors and tokenizer state are already separate.
         self.weights.archive.clear_cache()
         gc.collect()
 
@@ -133,8 +149,12 @@ class StreamedInklingRunner:
         filename: str = "Inkling-2-Mini.nxs",
         *,
         revision: str = "main",
-        cache_bytes: int = 200 * 1024 * 1024,
+        cache_bytes: int = 32 * 1024 * 1024,
         max_context_tokens: int = 128,
+        load_tokenizer: bool = True,
+        storage_cache_dir: str | os.PathLike[str] | None = None,
+        storage_cache_bytes: int = 5 * 1024 * 1024 * 1024,
+        storage_cache_reserve_bytes: int = 256 * 1024 * 1024,
         token: str | None = None,
     ) -> "StreamedInklingRunner":
         weights = Inkling2MiniWeights.from_hf_repo(
@@ -145,7 +165,14 @@ class StreamedInklingRunner:
             token=token,
         )
         try:
-            return cls(weights, max_context_tokens=max_context_tokens)
+            return cls(
+                weights,
+                max_context_tokens=max_context_tokens,
+                load_tokenizer=load_tokenizer,
+                storage_cache_dir=storage_cache_dir,
+                storage_cache_bytes=storage_cache_bytes,
+                storage_cache_reserve_bytes=storage_cache_reserve_bytes,
+            )
         except Exception:
             weights.close()
             raise
@@ -252,8 +279,20 @@ class StreamedInklingRunner:
         shape = entry.get("shape")
         if not isinstance(shape, list):
             raise ValueError(f"tensor {source_name} has no shape metadata")
-        payload = self.weights.archive.read_entry(source_name, max_bytes=64 * 1024 * 1024)
-        tensor = self.torch.frombuffer(bytearray(payload), dtype=dtype).reshape(shape)
+        element_count = math.prod(shape)
+        element_size = self.torch.empty((), dtype=dtype).element_size()
+        if element_count * element_size != entry["nbytes"]:
+            raise ValueError(f"tensor byte count does not match its dtype and shape: {source_name}")
+        tensor_path = self.storage_cache.materialize(
+            entry,
+            self.weights.archive.iter_entry_range(source_name, 0, entry["nbytes"]),
+        )
+        tensor = self.torch.from_file(
+            str(tensor_path),
+            shared=False,
+            size=element_count,
+            dtype=dtype,
+        ).reshape(shape)
         template = self._templates[target_name]
         if tuple(tensor.shape) != tuple(template.shape):
             raise ValueError(
@@ -391,9 +430,11 @@ class StreamedInklingRunner:
             for source, target in layer_entries:
                 tensor = self._tensor_from_entry(source, target)
                 self._replace_tensor(target, tensor, stash)
+            self.weights.archive.clear_cache()
             return stash
         except Exception:
             self._restore_tensors(stash)
+            self.weights.archive.clear_cache()
             raise
 
     def _load_tokenizer(self):
@@ -421,8 +462,39 @@ class StreamedInklingRunner:
         backend = Tokenizer.from_file(str(tokenizer_path))
         return _NxsTextTokenizer(backend, self.torch)
 
+    def stream_token_ids(self, input_ids: list[int], *, max_new_tokens: int = 24):
+        """Generate token IDs for an already-tokenized prompt without loading a tokenizer server-side."""
+        if not isinstance(max_new_tokens, int) or not 1 <= max_new_tokens <= 128:
+            raise ValueError("max_new_tokens must be between 1 and 128")
+        token_ids = [int(token_id) for token_id in input_ids]
+        if not token_ids or len(token_ids) > self.max_context_tokens:
+            raise ValueError(f"input_ids must contain 1 to {self.max_context_tokens} tokens")
+        if any(token_id < 0 or token_id >= int(self.model.config.vocab_size) for token_id in token_ids):
+            raise ValueError("input token id is outside the model vocabulary")
+        with self._lock, self.torch.inference_mode():
+            cache = None
+            next_input = self.torch.tensor([token_ids], dtype=self.torch.long, device="cpu")
+            eos_id = self.weights.config.get("eos_token_id")
+            if eos_id is None:
+                eos_id = self.weights.config["text_config"].get("eos_token_id")
+            for _ in range(max_new_tokens):
+                output = self.model(
+                    input_ids=next_input,
+                    cache=cache,
+                    use_cache=True,
+                    logits_to_keep=1,
+                )
+                cache = output.cache
+                token_id = int(output.logits[0, -1].argmax().item())
+                if eos_id is not None and token_id == int(eos_id):
+                    break
+                yield token_id
+                next_input = self.torch.tensor([[token_id]], dtype=self.torch.long)
+
     def stream_chat(self, messages: list[dict[str, str]], *, max_new_tokens: int = 24):
         """Yield the growing assistant reply; uses greedy decoding and a bounded context."""
+        if self.tokenizer is None:
+            raise RuntimeError("This runner was created without a tokenizer; use stream_token_ids instead.")
         if not isinstance(max_new_tokens, int) or not 1 <= max_new_tokens <= 128:
             raise ValueError("max_new_tokens must be between 1 and 128")
         with self._lock, self.torch.inference_mode():

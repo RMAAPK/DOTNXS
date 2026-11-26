@@ -9,12 +9,11 @@ import os
 import queue
 import threading
 from contextlib import asynccontextmanager
-from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from dotnxs.streamed_inkling import StreamedInklingRunner
 
@@ -23,7 +22,10 @@ logger = logging.getLogger("dotnxs.server")
 
 NXS_REPO_ID = os.getenv("NXS_REPO_ID", "rmaaorg/Inkling-2-Mini-NXS")
 NXS_FILENAME = os.getenv("NXS_FILENAME", "Inkling-2-Mini.nxs")
-CACHE_BYTES = int(os.getenv("DOTNXS_CACHE_BYTES", str(200 * 1024 * 1024)))
+CACHE_BYTES = int(os.getenv("DOTNXS_CACHE_BYTES", str(32 * 1024 * 1024)))
+STORAGE_CACHE_BYTES = int(os.getenv("DOTNXS_STORAGE_CACHE_BYTES", str(5 * 1024 * 1024 * 1024)))
+STORAGE_CACHE_RESERVE_BYTES = int(os.getenv("DOTNXS_STORAGE_CACHE_RESERVE_BYTES", str(256 * 1024 * 1024)))
+STORAGE_CACHE_DIR = os.getenv("DOTNXS_STORAGE_CACHE_DIR") or None
 MAX_CONTEXT_TOKENS = int(os.getenv("DOTNXS_MAX_CONTEXT_TOKENS", "64"))
 MAX_NEW_TOKENS = int(os.getenv("DOTNXS_MAX_NEW_TOKENS", "12"))
 CORS_ORIGINS = [
@@ -36,13 +38,8 @@ CORS_ORIGINS = [
 ]
 
 
-class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: str = Field(min_length=1, max_length=4000)
-
-
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1, max_length=12)
+    input_ids: list[StrictInt] = Field(min_length=1, max_length=MAX_CONTEXT_TOKENS)
 
 
 async def _load_runner(app: FastAPI) -> None:
@@ -54,6 +51,10 @@ async def _load_runner(app: FastAPI) -> None:
             NXS_FILENAME,
             cache_bytes=CACHE_BYTES,
             max_context_tokens=MAX_CONTEXT_TOKENS,
+            load_tokenizer=False,
+            storage_cache_dir=STORAGE_CACHE_DIR,
+            storage_cache_bytes=STORAGE_CACHE_BYTES,
+            storage_cache_reserve_bytes=STORAGE_CACHE_RESERVE_BYTES,
             token=os.getenv("HF_TOKEN") or None,
         )
         app.state.runner = runner
@@ -96,7 +97,16 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     if app.state.runner is not None:
-        return {"status": "ready", "model": NXS_REPO_ID, "cache_limit_bytes": CACHE_BYTES}
+        return {
+            "status": "ready",
+            "input_protocol": "token_ids_v1",
+            "model": NXS_REPO_ID,
+            "model_revision": getattr(app.state.runner.weights.archive, "source_revision", None),
+            "cache_limit_bytes": CACHE_BYTES,
+            "storage_cache_limit_bytes": app.state.runner.storage_cache.limit_bytes,
+            "storage_cache_used_bytes": app.state.runner.storage_cache.used_bytes,
+            "max_context_tokens": MAX_CONTEXT_TOKENS,
+        }
     if app.state.runner_error:
         return {"status": "error", "detail": app.state.runner_error[:500]}
     return {"status": "loading", "model": NXS_REPO_ID}
@@ -111,23 +121,22 @@ async def _chat_response(payload: ChatRequest):
     if runner is None:
         detail = app.state.runner_error or "Inkling is still loading; retry shortly."
         raise HTTPException(status_code=503, detail=detail, headers={"Retry-After": "30"})
-    if payload.messages[-1].role != "user":
-        raise HTTPException(status_code=422, detail="The final conversation message must be from the user.")
-    if sum(len(message.content) for message in payload.messages) > 3000:
-        raise HTTPException(status_code=413, detail="Conversation text exceeds the 3000-character limit.")
+    vocab_size = int(runner.model.config.vocab_size)
+    if any(token_id < 0 or token_id >= vocab_size for token_id in payload.input_ids):
+        raise HTTPException(status_code=422, detail="An input token ID is outside the model vocabulary.")
     if not app.state.generation_lock.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="The CPU model is busy; retry when the current reply finishes.")
 
-    messages = [message.model_dump() for message in payload.messages]
+    input_ids = payload.input_ids
     output_queue: queue.Queue = queue.Queue()
     stop_event = threading.Event()
 
     def generate() -> None:
         try:
-            for partial in runner.stream_chat(messages, max_new_tokens=MAX_NEW_TOKENS):
+            for token_id in runner.stream_token_ids(input_ids, max_new_tokens=MAX_NEW_TOKENS):
                 if stop_event.is_set():
                     break
-                output_queue.put(("token", {"text": partial}))
+                output_queue.put(("token", {"id": token_id}))
             output_queue.put(("done", {}))
         except Exception as exc:
             logger.exception("Inkling generation failed")

@@ -7,9 +7,16 @@ before loading the next expert.
 
 from __future__ import annotations
 
+import math
+import struct
 from typing import Sequence
 
 import numpy as np
+
+try:
+    from numba import njit as _njit
+except ImportError:  # The ordinary NumPy reference path remains available without Numba.
+    _njit = None
 
 # NVFP4 E2M1 values, indexed by the 4-bit code. The low nibble is the even
 # column and the high nibble is the odd column in each stored byte.
@@ -298,6 +305,223 @@ def run_sparse_moe(
     )[0]
 
 
+if _njit is not None:
+    @_njit(cache=True)
+    def _numba_round_bf16_scalar(value):
+        value = np.float32(value)
+        if value == 0.0 or not math.isfinite(value):
+            return value
+        if abs(value) < np.float32(2.0 ** -126):
+            quantum = np.float32(2.0 ** -133)
+            return np.float32(round(value / quantum) * quantum)
+        mantissa, exponent = math.frexp(value)
+        rounded_mantissa = np.float32(round(mantissa * 256.0) / 256.0)
+        return np.float32(math.ldexp(rounded_mantissa, exponent))
+
+    @_njit(cache=True)
+    def _numba_e4m3(code):
+        code = int(code)
+        sign = -1.0 if code & 0x80 else 1.0
+        exponent = (code >> 3) & 0x0F
+        mantissa = code & 0x07
+        if exponent == 15 and mantissa == 7:
+            return np.float32(np.nan)
+        if exponent == 0:
+            value = mantissa * (2.0 ** -9)
+        else:
+            value = (1.0 + mantissa / 8.0) * (2.0 ** (exponent - 7))
+        return np.float32(sign * value)
+
+    @_njit(cache=True)
+    def _numba_e8m0(code):
+        code = int(code)
+        if code == 255:
+            return np.float32(np.nan)
+        return np.float32(math.ldexp(1.0, code - 127))
+
+    @_njit(cache=True)
+    def _numba_nvfp4_matvec(weights, scales, values, amax, denominator, bf16):
+        rows, packed_columns = weights.shape
+        output = np.empty(rows, dtype=np.float32)
+        tensor_scale = np.float32(amax / denominator)
+        e2m1 = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
+        for row in range(rows):
+            total = np.float32(0.0)
+            for column in range(packed_columns):
+                byte = int(weights[row, column])
+                nibble_low = byte & 0x0F
+                nibble_high = byte >> 4
+                scale = np.float32(_numba_e4m3(scales[row, column // 8]) * tensor_scale)
+                weight_low = np.float32(e2m1[nibble_low & 7])
+                weight_high = np.float32(e2m1[nibble_high & 7])
+                if nibble_low & 8:
+                    weight_low = -weight_low
+                if nibble_high & 8:
+                    weight_high = -weight_high
+                weight_low = np.float32(weight_low * scale)
+                weight_high = np.float32(weight_high * scale)
+                if bf16:
+                    weight_low = _numba_round_bf16_scalar(weight_low)
+                    weight_high = _numba_round_bf16_scalar(weight_high)
+                total = np.float32(total + weight_low * values[column * 2])
+                total = np.float32(total + weight_high * values[column * 2 + 1])
+            output[row] = _numba_round_bf16_scalar(total) if bf16 else total
+        return output
+
+    @_njit(cache=True)
+    def _numba_mxfp8_matvec(weights, scales, values, bf16):
+        rows, columns = weights.shape
+        output = np.empty(rows, dtype=np.float32)
+        for row in range(rows):
+            total = np.float32(0.0)
+            for column in range(columns):
+                weight = np.float32(_numba_e4m3(weights[row, column]))
+                scale = _numba_e8m0(scales[row, column // 32])
+                weight = np.float32(weight * scale)
+                if bf16:
+                    weight = _numba_round_bf16_scalar(weight)
+                total = np.float32(total + weight * values[column])
+            output[row] = _numba_round_bf16_scalar(total) if bf16 else total
+        return output
+else:
+    _numba_round_bf16_scalar = None
+    _numba_e4m3 = None
+    _numba_e8m0 = None
+    _numba_nvfp4_matvec = None
+    _numba_mxfp8_matvec = None
+
+
+def run_file_backed_expert_mlp(
+    hidden_states,
+    tensors: dict[str, object],
+    *,
+    w13_shape: Sequence[int],
+    w2_shape: Sequence[int],
+    storage_dtype: str,
+    gate_softcap: float = 4.0,
+    up_softcap: float = 25.0,
+    bfloat16: bool = True,
+) -> np.ndarray:
+    """Run one expert directly from memory-mapped packed weight/scales files.
+
+    Numba decodes packed weights inside each matvec, avoiding full float32
+    copies of the expert matrices. If Numba is unavailable, use the existing
+    NumPy reference decoder as a correctness fallback.
+    """
+    x = np.asarray(hidden_states, dtype=np.float32).reshape(-1)
+    w13_rows, w13_columns = _shape_tuple(w13_shape)
+    w2_rows, w2_columns = _shape_tuple(w2_shape)
+    if w13_rows % 2 or w2_rows != x.size:
+        raise ValueError("file-backed expert matrix shapes do not match hidden/intermediate widths")
+    if gate_softcap <= 0 or up_softcap <= 0:
+        raise ValueError("expert softcap values must be positive")
+    w13 = np.asarray(tensors["w13_weight"], dtype=np.uint8).reshape(w13_rows, w13_columns)
+    w2 = np.asarray(tensors["w2_weight"], dtype=np.uint8).reshape(w2_rows, w2_columns)
+    w13_scales = np.asarray(tensors["w13_weight_scale"], dtype=np.uint8).reshape(w13_rows, -1)
+    w2_scales = np.asarray(tensors["w2_weight_scale"], dtype=np.uint8).reshape(w2_rows, -1)
+
+    if storage_dtype == "U8":
+        w13_amax = struct.unpack("<f", tensors["w13_weight_amax"])[0]
+        w2_amax = struct.unpack("<f", tensors["w2_weight_amax"])[0]
+        w13_denominator = struct.unpack("<f", tensors["w13_weight_outer_scale_denominator"])[0]
+        w2_denominator = struct.unpack("<f", tensors["w2_weight_outer_scale_denominator"])[0]
+        expected_w13_scales = w13_rows * ((w13_columns * 2) // 16)
+        expected_w2_scales = w2_rows * ((w2_columns * 2) // 16)
+        if (
+            x.size != w13_columns * 2
+            or w13_rows % 4
+            or w13_rows // 4 != w2_columns
+            or w13_columns % 8
+            or w2_columns % 8
+            or w13_scales.size != expected_w13_scales
+            or w2_scales.size != expected_w2_scales
+        ):
+            raise ValueError("NVFP4 mapped weights or scales have invalid shapes")
+        if (
+            not np.isfinite(w13_amax)
+            or not np.isfinite(w2_amax)
+            or not np.isfinite(w13_denominator)
+            or not np.isfinite(w2_denominator)
+            or w13_denominator == 0
+            or w2_denominator == 0
+        ):
+            raise ValueError("NVFP4 tensor scales must be finite with non-zero denominators")
+        if _numba_nvfp4_matvec is None:
+            w13_float = dequantize_nvfp4(
+                w13, w13_scales, w13_amax, w13_denominator, packed_shape=(w13_rows, w13_columns)
+            )
+            w2_float = dequantize_nvfp4(
+                w2, w2_scales, w2_amax, w2_denominator, packed_shape=(w2_rows, w2_columns)
+            )
+        else:
+            if bfloat16:
+                x = round_bf16(x)
+            raw_projection = _numba_nvfp4_matvec(
+                w13, w13_scales, x, w13_amax, w13_denominator, bfloat16
+            )
+            gate_up = np.concatenate((raw_projection[0::2], raw_projection[1::2]))
+            intermediate = gate_up.size // 2
+            gate, up = gate_up[:intermediate], gate_up[intermediate:]
+            gate = np.float32(gate_softcap) * np.tanh(gate / np.float32(gate_softcap))
+            up = np.float32(up_softcap) * np.tanh(up / np.float32(up_softcap))
+            sigmoid = np.empty_like(gate)
+            positive = gate >= 0
+            sigmoid[positive] = 1.0 / (1.0 + np.exp(-gate[positive]))
+            exp_gate = np.exp(gate[~positive])
+            sigmoid[~positive] = exp_gate / (1.0 + exp_gate)
+            activations = gate * sigmoid * up
+            if bfloat16:
+                activations = round_bf16(activations)
+            return _numba_nvfp4_matvec(
+                w2, w2_scales, activations, w2_amax, w2_denominator, bfloat16
+            )
+    elif storage_dtype == "F8_E4M3":
+        expected_w13_scales = w13_rows * (w13_columns // 32)
+        expected_w2_scales = w2_rows * (w2_columns // 32)
+        if (
+            x.size != w13_columns
+            or w13_rows // 2 != w2_columns
+            or w13_columns % 32
+            or w2_columns % 32
+            or w13_scales.size != expected_w13_scales
+            or w2_scales.size != expected_w2_scales
+        ):
+            raise ValueError("MXFP8 mapped weights or scales have invalid shapes")
+        if _numba_mxfp8_matvec is None:
+            w13_float = dequantize_mxfp8(w13, w13_scales, shape=(w13_rows, w13_columns))
+            w2_float = dequantize_mxfp8(w2, w2_scales, shape=(w2_rows, w2_columns))
+        else:
+            if bfloat16:
+                x = round_bf16(x)
+            raw_projection = _numba_mxfp8_matvec(w13, w13_scales, x, bfloat16)
+            gate_up = np.concatenate((raw_projection[0::2], raw_projection[1::2]))
+            intermediate = gate_up.size // 2
+            gate, up = gate_up[:intermediate], gate_up[intermediate:]
+            gate = np.float32(gate_softcap) * np.tanh(gate / np.float32(gate_softcap))
+            up = np.float32(up_softcap) * np.tanh(up / np.float32(up_softcap))
+            sigmoid = np.empty_like(gate)
+            positive = gate >= 0
+            sigmoid[positive] = 1.0 / (1.0 + np.exp(-gate[positive]))
+            exp_gate = np.exp(gate[~positive])
+            sigmoid[~positive] = exp_gate / (1.0 + exp_gate)
+            activations = gate * sigmoid * up
+            if bfloat16:
+                activations = round_bf16(activations)
+            return _numba_mxfp8_matvec(w2, w2_scales, activations, bfloat16)
+    else:
+        raise ValueError(f"unsupported file-backed expert dtype {storage_dtype!r}")
+
+    gate_up = deinterleave_gate_up_rows(w13_float)
+    return run_expert_mlp(
+        x,
+        gate_up,
+        w2_float,
+        gate_softcap=gate_softcap,
+        up_softcap=up_softcap,
+        bfloat16=bfloat16,
+    )
+
+
 __all__ = [
     "bf16_to_float32",
     "decode_e4m3fn",
@@ -306,6 +530,7 @@ __all__ = [
     "dequantize_nvfp4",
     "deinterleave_gate_up_rows",
     "run_expert_mlp",
+    "run_file_backed_expert_mlp",
     "run_selected_experts",
     "run_sparse_moe",
     "round_bf16",

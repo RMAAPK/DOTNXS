@@ -15,7 +15,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         if parsed.path == "/health":
-            body = b'{"status":"ready"}'
+            body = b'{"status":"ready","input_protocol":"token_ids_v1","model_revision":"679300b3131ca739554d472b19f16dd714efaff0"}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -31,8 +31,9 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.send_error(400, "invalid payload")
             return
-        if not request.get("messages"):
-            self.send_error(422, "missing messages")
+        input_ids = request.get("input_ids")
+        if not isinstance(input_ids, list) or not input_ids or any(type(token_id) is not int for token_id in input_ids):
+            self.send_error(422, "missing input_ids")
             return
 
         self.send_response(200)
@@ -41,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         for event in (
             b'event: status\ndata: {"status":"generating"}\n\n',
-            b'event: token\ndata: {"text":"gateway smoke reply"}\n\n',
+            b'event: token\ndata: {"id":42}\n\n',
             b'event: done\ndata: {}\n\n',
         ):
             self.wfile.write(f"{len(event):X}\r\n".encode("ascii") + event + b"\r\n")

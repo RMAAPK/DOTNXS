@@ -1,7 +1,9 @@
 """Experimental NXS-backed CPU components for Inkling 2 Mini.
 
-This module pages real tensors from a remote NXS archive and can execute one
-routed MoE layer using the checkpoint's packed NVFP4/MXFP8 experts. It is not a
+The optional storage cache keeps dense tensor files and routed-expert slices
+on local storage; NumPy can map the expert slices without copying their bytes
+back into anonymous RAM. This module can execute one routed MoE layer using
+the checkpoint's packed NVFP4/MXFP8 experts. It is not a
 complete model runtime yet: attention, loop/message state, embeddings, KV and
 convolution caches, tokenizer integration, and autoregressive generation are
 still required before enabling the chat UI.
@@ -9,12 +11,14 @@ still required before enabling the chat UI.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import struct
 from typing import Iterable, Iterator
 
 from .remote_archive import DEFAULT_CACHE_BYTES, RemoteNxsArchive
+from .storage_cache import FileBackedTensorCache
 
 _LAYER_EXPERT_RE = re.compile(r"^model\.llm\.layers\.(\d+)\.mlp\.experts\.")
 _PER_EXPERT_TENSORS = (
@@ -34,8 +38,13 @@ _SHARED_EXPERT_TENSORS = (
 class Inkling2MiniWeights:
     """Metadata and routed-expert fetcher for the Inkling 2 Mini NXS layout."""
 
-    def __init__(self, archive: RemoteNxsArchive) -> None:
+    def __init__(
+        self,
+        archive: RemoteNxsArchive,
+        storage_cache: FileBackedTensorCache | None = None,
+    ) -> None:
         self.archive = archive
+        self.storage_cache = storage_cache
         config_bytes = archive.read_entry("asset/config.json")
         try:
             self.config = json.loads(config_bytes.decode("utf-8"))
@@ -86,7 +95,7 @@ class Inkling2MiniWeights:
             archive.close()
             raise
 
-    def fetch_expert_tensors(self, layer_id: int, expert_id: int) -> dict[str, bytes]:
+    def fetch_expert_tensors(self, layer_id: int, expert_id: int) -> dict[str, object]:
         """Fetch one expert's packed weights/scales, verifying NXS chunk hashes."""
         if layer_id not in self.expert_layers:
             raise ValueError(f"layer {layer_id} has no routed-expert tensors in this archive")
@@ -94,11 +103,31 @@ class Inkling2MiniWeights:
             raise ValueError(f"expert_id must be in [0, {self.num_experts})")
 
         prefix = f"model.llm.layers.{layer_id}.mlp.experts."
-        tensors: dict[str, bytes] = {}
+        tensors: dict[str, object] = {}
         for suffix in _PER_EXPERT_TENSORS:
             name = prefix + suffix
             if name in self.entry_names:
-                tensors[suffix] = self.archive.read_tensor_expert(name, expert_id, self.num_experts)
+                if self.storage_cache is None:
+                    tensors[suffix] = self.archive.read_tensor_expert(name, expert_id, self.num_experts)
+                else:
+                    entry = self.archive.get_entry(name)
+                    if entry["nbytes"] % self.num_experts:
+                        raise ValueError(f"expert tensor {name!r} is not evenly divisible by expert count")
+                    expert_bytes = entry["nbytes"] // self.num_experts
+                    start = expert_id * expert_bytes
+                    cache_key = hashlib.sha256(
+                        f"{entry['sha256']}:{self.num_experts}:{expert_id}".encode("ascii")
+                    ).hexdigest()
+                    try:
+                        import numpy as np
+                    except ImportError as exc:
+                        raise RuntimeError("File-backed expert slices require NumPy") from exc
+                    path = self.storage_cache.materialize(
+                        {"nbytes": expert_bytes},
+                        self.archive.iter_entry_range(name, start, expert_bytes),
+                        cache_key=cache_key,
+                    )
+                    tensors[suffix] = np.memmap(path, dtype=np.uint8, mode="r")
         for suffix in _SHARED_EXPERT_TENSORS:
             name = prefix + suffix
             if name in self.entry_names:
@@ -318,9 +347,9 @@ class Inkling2MiniWeights:
     def run_routed_experts(
         self, layer_id: int, hidden_states, selected_experts, routing_weights, *, bfloat16: bool = True
     ):
-        """Execute router choices, prefetching each token's expert set concurrently."""
+        """Execute selected experts, mapping their raw files when storage caching is enabled."""
         import numpy as np
-        from .inkling_kernels import run_selected_experts
+        from .inkling_kernels import run_file_backed_expert_mlp, run_selected_experts
 
         text_config = self.config["text_config"]
         hidden = np.asarray(hidden_states, dtype=np.float32)
@@ -335,7 +364,31 @@ class Inkling2MiniWeights:
             matrices = self.decode_expert_matrices(layer_id, expert_id)
             return matrices["gate_up"], matrices["down"]
 
-        output = np.empty_like(hidden, dtype=np.float32)
+        output = np.zeros_like(hidden, dtype=np.float32)
+        if self.storage_cache is not None:
+            prefix = f"model.llm.layers.{layer_id}.mlp.experts."
+            w13_entry = self.archive.get_entry(prefix + "w13_weight")
+            w2_entry = self.archive.get_entry(prefix + "w2_weight")
+            storage_dtype = w13_entry.get("dtype")
+            if storage_dtype != w2_entry.get("dtype"):
+                raise ValueError("Inkling expert projections use mismatched storage dtypes")
+            for token_index in range(hidden.shape[0]):
+                for slot in np.argsort(expert_ids[token_index]):
+                    expert_id = int(expert_ids[token_index, slot])
+                    tensors = self.fetch_expert_tensors(layer_id, expert_id)
+                    expert_output = run_file_backed_expert_mlp(
+                        hidden[token_index],
+                        tensors,
+                        w13_shape=tuple(w13_entry["shape"][1:]),
+                        w2_shape=tuple(w2_entry["shape"][1:]),
+                        storage_dtype=storage_dtype,
+                        gate_softcap=float(text_config.get("mlp_gate_softcap", 4.0)),
+                        up_softcap=float(text_config.get("mlp_up_softcap", 25.0)),
+                        bfloat16=bfloat16,
+                    )
+                    output[token_index] += route_weights[token_index, slot] * expert_output
+            return output
+
         for token_index in range(hidden.shape[0]):
             ids = [int(value) for value in expert_ids[token_index]]
             self.prefetch_routed_experts(layer_id, ids)
