@@ -230,7 +230,9 @@ export default function App() {
           const body = await response.json();
           detail = body.detail || detail;
         } catch (_) {}
-        throw new Error(detail);
+        const requestError = new Error(detail);
+        requestError.status = response.status;
+        throw requestError;
       }
       if (!response.body) throw new Error("The API returned no response stream.");
 
@@ -292,14 +294,21 @@ export default function App() {
       setModelReady(true);
       setServerStatus("CPU server ready");
     } catch (error) {
-      const message = error.name === "AbortError" ? "Generation stopped." : error.message;
+      const isBusy = error.status === 429;
+      const message = error.name === "AbortError"
+        ? "Generation stopped."
+        : isBusy
+          ? "Another chat is running. This Render Free worker serves one generation at a time; your request was not queued. Please retry shortly."
+          : error.message;
       setMessages((previous) => {
         const next = [...previous];
         const currentIndex = next.findIndex((item) => item.pending);
         if (currentIndex >= 0) next[currentIndex] = { role: "assistant", content: message, error: true };
         return next;
       });
-      if (error.name !== "AbortError") {
+      if (isBusy) {
+        setServerStatus("Model busy · one chat at a time");
+      } else if (error.name !== "AbortError") {
         setModelReady(false);
         setServerStatus("Request failed");
       }
@@ -341,6 +350,7 @@ export default function App() {
           <View style={styles.chips}>
             <Text style={styles.chip}>single .nxs</Text>
             <Text style={styles.chip}>C++ API · CPU worker</Text>
+            <Text style={styles.chip}>one active chat at a time</Text>
             <Text style={styles.chip}>16 MiB RAM chunk cache</Text>
             <Text style={styles.chip}>{(storageCacheLimitBytes / 1024 ** 3).toFixed(1)} GiB hot tensor cache</Text>
             <Text style={styles.chip}>Apache-2.0 model</Text>
