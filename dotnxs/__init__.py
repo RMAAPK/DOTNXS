@@ -8,6 +8,7 @@ from .archive import (
     NxsFormatError,
     NxsWriter,
 )
+from .parquet_dataset import NxsParquetDataset, NxsParquetEntryReader
 
 __all__ = [
     "DEFAULT_CHUNK_BYTES",
@@ -15,6 +16,8 @@ __all__ = [
     "NXS_VERSION",
     "NxsArchive",
     "NxsFormatError",
+    "NxsParquetDataset",
+    "NxsParquetEntryReader",
     "NxsWriter",
 ]
 

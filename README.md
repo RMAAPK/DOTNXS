@@ -42,6 +42,24 @@ dotnxs convert hf thinkingmachines/Inkling-2-Mini inkling.nxs
 
 `hf2nxs` reads the Hub file index and fetches Safetensors tensor ranges over HTTP into one `.nxs` archive, avoiding a full local checkpoint copy. Range requests must be supported by the serving endpoint.
 
+Pack a Parquet file or a directory of Parquet shards into a dataset archive:
+
+```bash
+python -m pip install 'dotnxs[parquet]'
+dotnxs convert parquet ./rules-parquet rules.nxs
+```
+
+The Parquet converter preserves each shard byte-for-byte and records its Arrow schema and row-group summary in the NXS manifest. `NxsParquetDataset(archive).read_row_group(name, index)` reads one row group through NXS range reads without extracting the whole shard. This is data access, not a vector/RAG index. Keep large rule corpora in a separate dataset archive/object store rather than the model's inference bundle.
+
+```python
+from dotnxs import NxsArchive, NxsParquetDataset
+
+with NxsArchive("rules.nxs") as archive:
+    dataset = NxsParquetDataset(archive)
+    shard = dataset.list_shards()[0]["name"]
+    rows = dataset.read_row_group(shard, 0)
+```
+
 ## Experimental Inkling runtime and Render demo
 
 Install the CPU runtime dependencies with `python -m pip install '.[runtime]'`. The experimental text runner uses Transformers' Inkling architecture and fetches the checkpoint from `rmaaorg/Inkling-2-Mini-NXS`; it does not stage the whole model locally. The Render demo source is split into:

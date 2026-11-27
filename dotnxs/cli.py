@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from .archive import NxsArchive
 from .hf2nxs import convert_repo
+from .parquet2nxs import convert_parquet
 from .safetensors2nxs import convert_file
 from .transformers2nxs import convert_directory
 
@@ -40,6 +41,14 @@ def _build_parser() -> argparse.ArgumentParser:
     transformers_parser.add_argument("--chunk-mib", type=int, default=4)
     transformers_parser.add_argument("--force", action="store_true")
 
+    parquet_parser = convert_subparsers.add_parser(
+        "parquet", help="pack one Parquet shard or a directory of Parquet shards"
+    )
+    parquet_parser.add_argument("input", help="Parquet file or directory containing Parquet shards")
+    parquet_parser.add_argument("output", help="destination single-file .nxs archive")
+    parquet_parser.add_argument("--chunk-mib", type=int, default=4)
+    parquet_parser.add_argument("--force", action="store_true")
+
     hf_parser = convert_subparsers.add_parser("hf", help="download and convert a Hugging Face model repo")
     hf_parser.add_argument("repo_id", help="Hugging Face repo in owner/name form")
     hf_parser.add_argument("output", help="destination .nxs archive")
@@ -62,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "convert" and args.source_format in {"safetensors", "transformers", "hf"}:
+        if args.command == "convert" and args.source_format in {"safetensors", "transformers", "parquet", "hf"}:
             if args.chunk_mib <= 0:
                 parser.error("--chunk-mib must be greater than zero")
             chunk_bytes = args.chunk_mib * 1024 * 1024
@@ -88,6 +97,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"Created {result['output']}: {result['tensor_count']} tensors from "
                     f"{result['weight_files']} weight files and {result['asset_files']} assets"
+                )
+                return 0
+            if args.source_format == "parquet":
+                result = convert_parquet(
+                    args.input,
+                    args.output,
+                    chunk_bytes=chunk_bytes,
+                    overwrite=args.force,
+                )
+                print(
+                    f"Created {result['output']}: {result['parquet_files']} Parquet shards, "
+                    f"{result['row_count']} rows, {result['input_bytes']} bytes"
                 )
                 return 0
             result = convert_repo(

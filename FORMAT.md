@@ -82,4 +82,4 @@ Chunk size is a writer/runtime policy, not a format constant. Chunking must pres
 
 ## Converter scope
 
-The first converter, `safetensors2nxs`, copies tensor payload bytes into internal chunks and records source names, dtypes, shapes, and metadata. It is streaming and lossless, and writes one `.nxs` archive. Transformers/Hugging Face wrappers, GGUF, Parquet, and model execution are subsequent work; converter success alone does not imply that a model can run.
+The converters copy tensor payload bytes or Parquet shard bytes into internal chunks and record source names, dtypes/shapes when applicable, and metadata. They are streaming and lossless. `parquet2nxs` records Arrow schema and row-group summaries but does not define a Parquet query engine, embeddings, or RAG retrieval semantics. Transformers/Hugging Face wrappers and model execution are separate layers; converter success alone does not imply that a model can run.

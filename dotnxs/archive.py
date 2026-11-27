@@ -434,6 +434,63 @@ class NxsArchive:
         if verify and whole_hash.hexdigest() != entry["sha256"]:
             raise NxsFormatError(f"entry SHA-256 mismatch in {name!r}")
 
+    def iter_entry_range(
+        self,
+        name: str,
+        start: int = 0,
+        length: int | None = None,
+        *,
+        verify: bool = True,
+    ) -> Iterator[bytes]:
+        """Yield a logical byte range, reading only intersecting NXS chunks."""
+        entry = self.get_entry(name)
+        total_size = entry["nbytes"]
+        if not _is_nonnegative_int(start):
+            raise ValueError("entry range start and length must be non-negative integers")
+        if length is None:
+            length = total_size - start
+        if not _is_nonnegative_int(length):
+            raise ValueError("entry range start and length must be non-negative integers")
+        if start > total_size or length > total_size - start:
+            raise ValueError("requested entry range exceeds the entry size")
+        if length == 0:
+            return
+
+        end = start + length
+        verify_entry_hash = verify and start == 0 and length == total_size
+        whole_hash = hashlib.sha256() if verify_entry_hash else None
+        for chunk in entry["chunks"]:
+            logical_start = chunk["logical_offset"]
+            logical_end = logical_start + chunk["length"]
+            overlap_start = max(start, logical_start)
+            overlap_end = min(end, logical_end)
+            if overlap_start >= overlap_end:
+                continue
+            self._file.seek(chunk["offset"])
+            data = self._file.read(chunk["length"])
+            if len(data) != chunk["length"]:
+                raise NxsFormatError(f"truncated payload chunk in {name!r}")
+            if verify and hashlib.sha256(data).hexdigest() != chunk["sha256"]:
+                raise NxsFormatError(f"payload chunk SHA-256 mismatch in {name!r}")
+            if whole_hash is not None:
+                whole_hash.update(data)
+            left = overlap_start - logical_start
+            right = overlap_end - logical_start
+            yield data[left:right]
+        if whole_hash is not None and whole_hash.hexdigest() != entry["sha256"]:
+            raise NxsFormatError(f"entry SHA-256 mismatch in {name!r}")
+
+    def read_entry_range(
+        self,
+        name: str,
+        start: int = 0,
+        length: int | None = None,
+        *,
+        verify: bool = True,
+    ) -> bytes:
+        """Read a logical byte range, optionally checking intersecting chunk hashes."""
+        return b"".join(self.iter_entry_range(name, start, length, verify=verify))
+
     def verify(self) -> None:
         for entry in self.entries:
             for _ in self.iter_entry(entry["name"], verify=True):
